@@ -163,7 +163,7 @@ export const TASK_METS = [
     metMin: 5.5,
     metMax: 6.5,
     capture: 'mixedModerate',
-    keywords: ['shovel', 'shoveling', 'gravel shovel', 'mulch shovel'],
+    keywords: ['shovel', 'shoveling', 'gravel shovel', 'mulch shovel', 'gravel', 'haul gravel', 'gravel haul'],
   },
   {
     id: 'concrete-bags',
