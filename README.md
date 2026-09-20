@@ -72,6 +72,7 @@ the weight that was actually in effect. A per-entry fasted-morning weight also w
 | §12.3 | Intermediate/KRI auto-selection per phase, override-able | ✅ |
 | §12.4 | Full TDEE calculation engine | ✅ |
 | §12.5 | History log, persistent and editable after the fact | ✅ |
+| — | Calendar-log import (.md/.txt/.pdf) — fills known fields, leaves the rest blank | ✅ |
 | §12.6 | Trend view — TDEE, weight, work vs rest, rolling 7-day | ✅ |
 | §12.7 | Multi-site / multi-phase splitting with independent MET/model/time | ✅ |
 | §12.8 | BPM/HRR calculator with correction factors and implied MET | ✅ |
@@ -89,7 +90,23 @@ bands, inferential (undocumented) heat triggers, estimated break time, phase win
 reconcile with the shift, deductions exceeding the shift length, missing bodyweight, manual model
 overrides, and BPM readings implying a higher MET than the task assignment.
 
-## Layout
+## Calendar-log import
+
+The Daily entry tab has an **Import from file** button (`.md`, `.txt`, or `.pdf`). It reads
+whatever labeled fields it can confidently find — date, shift, lunch, breaks, temp/feels-like,
+site count, weight, intake, and bulleted tasks (auto-MET-suggested the same way manual typing
+is) — and leaves everything else blank for manual entry, exactly as asked. The full original
+text is always kept in the Notes field, and the app shows a summary of what was parsed vs. what
+still needs a human. See the "What format does the import file need to be?" toggle on the entry
+form for the expected layout, or `src/calendarImport.js`, which documents and implements it
+(covered by `tests/calendarImport.test.mjs`, including the actual real-world calendar text this
+was built against).
+
+PDF import works the same way but needs `pdfjs-dist` fetched from a CDN at runtime (there's no
+pure-JS way to read PDF text otherwise) — `.md`/`.txt` have no such dependency and work fully
+offline. If PDF import fails, save the file as `.md` or `.txt` instead.
+
+
 
 ```
 index.html            shell

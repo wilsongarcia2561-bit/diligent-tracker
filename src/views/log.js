@@ -24,6 +24,7 @@ import {
   suggestMet,
 } from '../engine.js';
 import { stackedBar } from '../charts.js';
+import { parseCalendarLog } from '../calendarImport.js';
 import * as store from '../store.js';
 import { debounce, esc, kcal, num, pct, prettyDate, toast, todayIso } from '../ui.js';
 
@@ -215,9 +216,32 @@ function formTemplate(entry, calc) {
     </div>
     <div class="toolbar-right">
       <span id="save-state" class="save-state ${dirty ? 'pending' : 'saved'}">${dirty ? 'Saving…' : 'Saved'}</span>
+      <button type="button" class="btn ghost" data-action="import-file">Import from file</button>
+      <input type="file" id="import-file-input" accept=".md,.markdown,.txt,.pdf" hidden>
       <button type="button" class="btn ghost" data-action="delete-entry">Delete day</button>
     </div>
   </div>
+
+  <details class="import-guide">
+    <summary>What format does the import file need to be?</summary>
+    <p class="muted small">
+      Plain text or Markdown (<code>.md</code>, <code>.txt</code>) parses instantly and works offline. A <code>.pdf</code>
+      works too, but needs a one-time download of a PDF-reading library from a CDN, so it needs internet access the
+      first time. Either way, only clearly-labeled fields get filled in automatically — anything ambiguous is left
+      blank for you, and the full original text is always kept in the Notes field below.
+    </p>
+    <pre class="format-sample">Date: 2026-09-18
+Shift: 8:08 AM - 3:18 PM
+Location: 200 Sherry Hl Trl, Madison, AL
+
+98° (Feels 104° Sunny)
+Breaks: 6
+(Lunch break 12:16 - 1:04)
+
+• Hauling gravel via wheelbarrow &amp; dump to designated area
+• Repair sprinklers and inspect
+• Water sod</pre>
+  </details>
 
   <p class="day-title">${esc(prettyDate(entry.date))}</p>
 
@@ -486,6 +510,10 @@ function rebuildForm(form) {
 
 function onFieldEvent(e, form) {
   const target = e.target;
+  if (target.id === 'import-file-input') {
+    handleImportFile(e, form);
+    return;
+  }
   if (target.id === 'entry-date') {
     if (dirty) store.saveEntry(draft);
     loadDate(target.value);
@@ -550,12 +578,72 @@ function refreshSuggestionsAndHints(form) {
   }
 }
 
+/**
+ * Reads a dropped/selected calendar log file, parses it, and merges the result
+ * onto the current draft — switching days first if the file names a different
+ * date. Fields the parser didn't confidently find are left exactly as they
+ * were (blank, or whatever was already typed in).
+ */
+async function handleImportFile(e, form) {
+  const fileInput = e.target;
+  const file = fileInput.files && fileInput.files[0];
+  fileInput.value = '';
+  if (!file) return;
+
+  const ext = (file.name.split('.').pop() || '').toLowerCase();
+  let text;
+  try {
+    if (ext === 'pdf') {
+      toast('Reading PDF…');
+      const buffer = await file.arrayBuffer();
+      const { extractPdfText } = await import('../pdfText.js');
+      text = await extractPdfText(buffer);
+    } else {
+      text = await file.text();
+    }
+  } catch (err) {
+    toast(err.message || 'Could not read that file.', 'warn');
+    return;
+  }
+
+  const { patch, matched, unmatched } = parseCalendarLog(text, {
+    filename: file.name,
+    fallbackDate: draft.date,
+  });
+
+  if (patch.date && patch.date !== draft.date) {
+    if (dirty) store.saveEntry(draft);
+    loadDate(patch.date);
+  }
+
+  for (const [key, value] of Object.entries(patch)) {
+    if (key === 'phases' || key === 'notes' || key === 'date') continue;
+    if (value !== undefined && value !== null) draft[key] = value;
+  }
+  if (patch.phases && patch.phases.length) {
+    draft.phases = patch.phases.map((p) => ({ ...store.newPhase(), ...p }));
+  }
+  draft.notes = draft.notes ? `${patch.notes}\n\n--- previous notes ---\n${draft.notes}` : patch.notes;
+
+  markDirty();
+  rebuildForm(form);
+
+  toast(
+    matched.length
+      ? `Imported ${draft.date}: ${matched.join(', ')} parsed.`
+      : `Imported ${draft.date}, but nothing matched a known pattern — see the format guide and original text in Notes.`,
+  );
+  if (unmatched.length) toast(`Fill in manually: ${unmatched.join(', ')}.`, 'warn');
+}
+
 function onClick(e, form) {
   const action = e.target.dataset.action;
   if (!action) return;
   e.preventDefault();
 
-  if (action === 'add-phase') {
+  if (action === 'import-file') {
+    form.querySelector('#import-file-input').click();
+  } else if (action === 'add-phase') {
     draft.phases.push(store.newPhase());
     markDirty();
     rebuildForm(form);
