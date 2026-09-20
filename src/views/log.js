@@ -24,7 +24,7 @@ import {
   suggestMet,
 } from '../engine.js';
 import { stackedBar } from '../charts.js';
-import { parseCalendarLog } from '../calendarImport.js';
+import { parseCalendarLog, splitDayBlocks } from '../calendarImport.js';
 import * as store from '../store.js';
 import { debounce, esc, kcal, num, pct, prettyDate, toast, todayIso } from '../ui.js';
 
@@ -230,6 +230,12 @@ function formTemplate(entry, calc) {
       first time. Either way, only clearly-labeled fields get filled in automatically — anything ambiguous is left
       blank for you, and the full original text is always kept in the Notes field below.
     </p>
+    <p class="muted small">
+      One file can hold <strong>many days at once</strong> — separate each day's block with a line containing just
+      <code>---</code>. Every dated block is saved as its own day automatically (no merging, no clicking through
+      each one) and you land on History to review them. A file with no <code>---</code> is treated as a single day
+      and merges onto whatever's currently open instead.
+    </p>
     <pre class="format-sample">Date: 2026-09-18
 Shift: 8:08 AM - 3:18 PM
 Location: 200 Sherry Hl Trl, Madison, AL
@@ -240,7 +246,13 @@ Breaks: 6
 
 • Hauling gravel via wheelbarrow &amp; dump to designated area
 • Repair sprinklers and inspect
-• Water sod</pre>
+• Water sod
+
+---
+
+Date: 2026-09-19
+Shift: 7:56 AM - 11:51 AM
+...</pre>
   </details>
 
   <p class="day-title">${esc(prettyDate(entry.date))}</p>
@@ -579,10 +591,68 @@ function refreshSuggestionsAndHints(form) {
 }
 
 /**
+ * A file with one or more "---"-separated day blocks is bulk-imported: every
+ * block with a parseable date is saved directly as its own entry (full
+ * create, overwriting anything already stored for that date), with no
+ * per-field merge step — this is the "plug and play, don't make me click
+ * through each day" path. A block with no date at all is skipped and
+ * reported rather than guessed at.
+ */
+function handleBulkImport(blocks, filename, form) {
+  const savedDates = [];
+  let skipped = 0;
+  const unmatchedByDate = {};
+
+  for (const block of blocks) {
+    const { patch, unmatched } = parseCalendarLog(block, { filename });
+    if (!patch.date) {
+      skipped += 1;
+      continue;
+    }
+    const entry = {
+      ...store.newEntry(patch.date),
+      ...patch,
+      // A genuinely task-less day stays an empty array (not a padded blank
+      // phase) so the engine's "no task phases logged" flag actually fires
+      // in History. loadDate() adds a blank phase for editing convenience
+      // only once someone opens that day in the Daily entry tab.
+      phases: patch.phases && patch.phases.length
+        ? patch.phases.map((p) => ({ ...store.newPhase(), ...p }))
+        : [],
+    };
+    store.saveEntry(entry);
+    savedDates.push(patch.date);
+    if (unmatched.length) unmatchedByDate[patch.date] = unmatched;
+  }
+
+  savedDates.sort();
+  const daysWithGaps = savedDates.filter((d) => (unmatchedByDate[d] || []).length > 2);
+
+  toast(
+    savedDates.length
+      ? `Imported ${savedDates.length} day${savedDates.length === 1 ? '' : 's'}` +
+          `${savedDates.length > 1 ? ` (${savedDates[0]} to ${savedDates.at(-1)})` : ` (${savedDates[0]})`}.` +
+          ` Existing entries for those dates were overwritten.`
+      : 'No day blocks had a readable date — nothing was imported.',
+  );
+  if (skipped) toast(`${skipped} block(s) had no "Date:" line and were skipped entirely.`, 'warn');
+  if (daysWithGaps.length) {
+    toast(`${daysWithGaps.length} day(s) are missing several fields — check them in History.`, 'warn');
+  }
+
+  if (savedDates.length) {
+    loadDate(savedDates.at(-1));
+    rebuildForm(form);
+  }
+  location.hash = 'history';
+}
+
+/**
  * Reads a dropped/selected calendar log file, parses it, and merges the result
  * onto the current draft — switching days first if the file names a different
  * date. Fields the parser didn't confidently find are left exactly as they
- * were (blank, or whatever was already typed in).
+ * were (blank, or whatever was already typed in). A file containing several
+ * "---"-separated days is routed to the bulk importer instead.
  */
 async function handleImportFile(e, form) {
   const fileInput = e.target;
@@ -603,6 +673,12 @@ async function handleImportFile(e, form) {
     }
   } catch (err) {
     toast(err.message || 'Could not read that file.', 'warn');
+    return;
+  }
+
+  const blocks = splitDayBlocks(text);
+  if (blocks.length > 1) {
+    handleBulkImport(blocks, file.name, form);
     return;
   }
 

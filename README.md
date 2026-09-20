@@ -95,12 +95,27 @@ overrides, and BPM readings implying a higher MET than the task assignment.
 The Daily entry tab has an **Import from file** button (`.md`, `.txt`, or `.pdf`). It reads
 whatever labeled fields it can confidently find — date, shift, lunch, breaks, temp/feels-like,
 site count, weight, intake, and bulleted tasks (auto-MET-suggested the same way manual typing
-is) — and leaves everything else blank for manual entry, exactly as asked. The full original
-text is always kept in the Notes field, and the app shows a summary of what was parsed vs. what
-still needs a human. See the "What format does the import file need to be?" toggle on the entry
-form for the expected layout, or `src/calendarImport.js`, which documents and implements it
-(covered by `tests/calendarImport.test.mjs`, including the actual real-world calendar text this
-was built against).
+is, with a leading `(HH:MM - HH:MM)` on a bullet read as that task's own start/end) — and leaves
+everything else blank for manual entry, exactly as asked. The full original text is always kept
+in the Notes field, and the app shows a summary of what was parsed vs. what still needs a human.
+See the "What format does the import file need to be?" toggle on the entry form for the expected
+layout, or `src/calendarImport.js`, which documents and implements it (covered by
+`tests/calendarImport.test.mjs`, including a sanitized fixture built from real calendar data with
+fake addresses).
+
+**One file can hold many days.** Separate each day's block with a line containing only `---`;
+every dated block is saved as its own entry directly — no per-day clicking through — and the app
+lands on History so you can review what came in. A file with no `---` is treated as a single day
+and merges onto whatever's currently open instead of creating a new entry.
+
+Two correctness details worth knowing about, both found and fixed against real data during
+development:
+- A bulleted `NOTE: ...` line is treated as commentary, not a task — it stays in Notes but isn't
+  turned into a phantom zero-duration phase.
+- When some tasks in a day have a clean `(HH:MM - HH:MM)` prefix and others don't, the untimed
+  ones get the *average* duration of their timed siblings rather than being silently zeroed out
+  by the proportional time-split (`allocatePhaseMinutes` in `src/engine.js`) — flagged in the
+  day's data-quality notes either way.
 
 PDF import works the same way but needs `pdfjs-dist` fetched from a CDN at runtime (there's no
 pure-JS way to read PDF text otherwise) — `.md`/`.txt` have no such dependency and work fully

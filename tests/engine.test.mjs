@@ -194,6 +194,36 @@ describe('§5/§8 phase time allocation', () => {
     close(out[0].netMinutes, 200);
     close(out[1].netMinutes, 200);
   });
+
+  it('gives an untimed phase the average weight of its timed siblings, not zero', () => {
+    // One phase has a real 60-min window, one has none at all — the untimed
+    // phase must not be erased just because its raw gross length is 0.
+    const out = allocatePhaseMinutes(
+      [
+        { id: 'timed', start: '08:00', end: '09:00', netMinutesOverride: '' }, // 60 min gross
+        { id: 'untimed', netMinutesOverride: '' },
+      ],
+      120,
+    );
+    close(out[0].netMinutes, 60); // gets its own real weight of the 120 available
+    close(out[1].netMinutes, 60); // gets the average timed weight (60), not 0
+    assert.ok(out[1].netMinutes > 0, 'an untimed phase must still receive time');
+  });
+
+  it('weights an untimed phase against the average of several timed siblings', () => {
+    const out = allocatePhaseMinutes(
+      [
+        { id: 'a', start: '08:00', end: '09:00', netMinutesOverride: '' }, // 60
+        { id: 'b', start: '09:00', end: '11:00', netMinutesOverride: '' }, // 120
+        { id: 'untimed', netMinutesOverride: '' }, // synthetic weight = avg(60,120) = 90
+      ],
+      270,
+    );
+    // total weight = 60+120+90 = 270, remaining = 270 → each phase gets weight/270*270 = weight
+    close(out[0].netMinutes, 60);
+    close(out[1].netMinutes, 120);
+    close(out[2].netMinutes, 90);
+  });
 });
 
 describe('§6 BPM correction and HRR', () => {
@@ -403,6 +433,22 @@ describe('§1 full-day calculation', () => {
   it('flags a day with no BPM data', () => {
     const calc = calculateDay(baseDay, SETTINGS);
     assert.ok(calc.flags.some((f) => /No BPM data/.test(f.text)));
+  });
+
+  it('flags an untimed phase mixed in with timed siblings, and does not zero its kcal', () => {
+    const day = {
+      ...baseDay,
+      feelsLikeF: 78,
+      phases: [
+        { id: 'a', description: 'timed dig', soilCode: 'HC', met: 7.0, start: '07:00', end: '10:00' },
+        { id: 'b', description: 'untimed cleanup', met: 4.0 },
+      ],
+    };
+    const calc = calculateDay(day, SETTINGS);
+    const untimed = calc.phases.find((p) => p.id === 'b');
+    assert.ok(untimed.netMinutes > 0, 'untimed phase must get real net minutes, not zero');
+    assert.ok(untimed.kcal > 0);
+    assert.ok(calc.flags.some((f) => /no start\/end time/.test(f.text)));
   });
 
   it('flags deductions that exceed the shift', () => {

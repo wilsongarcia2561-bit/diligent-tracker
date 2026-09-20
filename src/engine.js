@@ -374,18 +374,32 @@ export function allocatePhaseMinutes(phases, netWorkMinutes) {
 
   const overrideTotal = list.reduce((sum, p) => sum + (p.override ?? 0), 0);
   const flexible = list.filter((p) => p.override === null);
-  const flexibleGross = flexible.reduce((sum, p) => sum + p.grossMinutes, 0);
   const remaining = netWorkMinutes - overrideTotal;
+
+  // When some flexible phases have a real timestamped duration and others
+  // don't (e.g. one task logged as "8:24-11:09" and another with no times at
+  // all), a phase with no timestamp still represents real work — giving it
+  // literal zero weight in the proportional split below would erase it
+  // entirely. It gets the average weight of its timed siblings instead, so
+  // it reads as "an average-sized task" rather than nothing. When every
+  // flexible phase is untimed (the common case), this reduces to the
+  // original equal split unchanged.
+  const timedFlexible = flexible.filter((p) => p.grossMinutes > 0);
+  const averageTimedGross = timedFlexible.length
+    ? timedFlexible.reduce((sum, p) => sum + p.grossMinutes, 0) / timedFlexible.length
+    : 0;
+  const weight = (p) => (p.grossMinutes > 0 ? p.grossMinutes : averageTimedGross);
+  const flexibleWeightTotal = flexible.reduce((sum, p) => sum + weight(p), 0);
 
   return list.map((p) => {
     if (p.override !== null) {
       return { ...p, netMinutes: p.override, exact: true };
     }
-    if (flexibleGross <= 0) {
+    if (flexibleWeightTotal <= 0) {
       // No usable phase timestamps: split what's left evenly.
       return { ...p, netMinutes: flexible.length ? remaining / flexible.length : 0, exact: false };
     }
-    return { ...p, netMinutes: (remaining * p.grossMinutes) / flexibleGross, exact: false };
+    return { ...p, netMinutes: (remaining * weight(p)) / flexibleWeightTotal, exact: false };
   });
 }
 
@@ -661,6 +675,12 @@ export function calculateDay(entry, settings = {}) {
       flags.push({
         level: 'info',
         text: `"${p.description || 'Untitled phase'}": model manually set to ${MODEL_LABELS[p.model]} (auto-selection chose ${MODEL_LABELS[p.autoModel]}).`,
+      });
+    }
+    if (!p.exactNet && p.grossMinutes === 0 && phases.some((sib) => sib.grossMinutes > 0)) {
+      flags.push({
+        level: 'info',
+        text: `"${p.description || 'Untitled phase'}" has no start/end time — given an average-sized share of net work time from its timed sibling phases. Add exact start/end or exact net minutes for a tighter split.`,
       });
     }
   }
