@@ -2,21 +2,25 @@
 <html lang="en">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Diligent III — TDEE Tracker</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>TDEE.</title>
+    <meta name="description" content="Personal TDEE tracker for outdoor landscaping work — per-task MET, KRI heat model, BPM/HRR validation.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600;700&display=swap">
     <link rel="stylesheet" href="styles.css">
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🪴</text></svg>">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%239be15d'/><text x='16' y='21' text-anchor='middle' font-family='monospace' font-weight='700' font-size='13' fill='%230c0d0f'>D3</text></svg>">
   </head>
   <body>
     <header class="app-header">
-      <div class="brand">
-        <span class="brand-mark">III</span>
-        <div>
-          <h1>Diligent III</h1>
-          <p class="brand-sub">TDEE tracking framework</p>
-        </div>
+      <div class="bar">
+        <a class="brand" href="#trends" aria-label="Diligent III — Trends">
+          <span class="logo" aria-hidden="true">D3</span>
+          <span class="brand-name">Diligent III</span>
+        </a>
+        <nav id="tabs" class="tabs" aria-label="Sections"></nav>
+        <div id="header-actions" class="header-actions"></div>
       </div>
-      <nav id="tabs" class="tabs" role="tablist"></nav>
     </header>
 
     <main id="view" class="view"></main>
@@ -26,10 +30,11 @@
         Estimates only — single-day precision is roughly ±300–500 kcal. MET values are population averages, and the
         NEAT and background lines are low-confidence estimates. Not medical advice.
       </p>
-      <p class="muted small">All data stays in this browser's local storage. Export a backup from Settings.</p>
+      <p>All data stays in this browser's local storage. Back it up from Settings.</p>
     </footer>
 
-    <div id="toast-host" class="toast-host"></div>
+    <nav id="bottom-nav" class="bottom-nav" aria-label="Sections"></nav>
+    <div id="toast-host" class="toast-host" aria-live="polite"></div>
     <script type="module" src="src/app.js"></script>
   </body>
 </html>

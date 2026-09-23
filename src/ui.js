@@ -64,12 +64,76 @@ export function toast(message, kind = 'ok') {
   }, 2600);
 }
 
-export function download(filename, text, mime = 'application/json') {
-  const blob = new Blob([text], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+/**
+ * Two-step destructive button: the first click arms it and relabels it, a
+ * second click within 4s confirms. Built in-page because the hosted artifact
+ * viewer silently answers window.confirm() with false.
+ */
+export function confirmClick(btn, prompt = 'Click again to confirm') {
+  if (btn.dataset.armed === '1') {
+    clearTimeout(btn._disarm);
+    btn.dataset.armed = '';
+    btn.textContent = btn.dataset.label;
+    btn.classList.remove('armed');
+    return true;
+  }
+  btn.dataset.label = btn.textContent;
+  btn.dataset.armed = '1';
+  btn.textContent = prompt;
+  btn.classList.add('armed');
+  btn._disarm = setTimeout(() => {
+    btn.dataset.armed = '';
+    btn.textContent = btn.dataset.label;
+    btn.classList.remove('armed');
+  }, 4000);
+  return false;
+}
+
+/**
+ * Shows exported text (CSV, JSON backup) in a dialog with a Copy button.
+ * Copy-to-clipboard instead of a file download, because the hosted viewer
+ * blocks every download a page starts; paste it into a file to keep it.
+ */
+export function openTextPanel({ title, hint, text }) {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-head">
+        <h2 id="modal-title">${esc(title)}</h2>
+        <button type="button" class="icon-btn" data-close aria-label="Close">✕</button>
+      </div>
+      ${hint ? `<p class="muted small">${esc(hint)}</p>` : ''}
+      <textarea id="export-text" readonly spellcheck="false"></textarea>
+      <div class="modal-actions">
+        <button type="button" class="btn ghost" data-close>Close</button>
+        <button type="button" class="btn primary" data-copy>Copy to clipboard</button>
+      </div>
+    </div>`;
+  const area = backdrop.querySelector('textarea');
+  area.value = text;
+  const close = () => {
+    backdrop.remove();
+    document.removeEventListener('keydown', onKey);
+  };
+  const onKey = (e) => {
+    if (e.key === 'Escape') close();
+  };
+  document.addEventListener('keydown', onKey);
+  backdrop.addEventListener('click', async (e) => {
+    if (e.target === backdrop || e.target.closest('[data-close]')) {
+      close();
+    } else if (e.target.closest('[data-copy]')) {
+      try {
+        await navigator.clipboard.writeText(text);
+        toast('Copied to clipboard');
+      } catch {
+        area.focus();
+        area.select();
+        toast('Selected — press Ctrl+C (⌘C) to copy', 'warn');
+      }
+    }
+  });
+  document.body.append(backdrop);
+  backdrop.querySelector('[data-copy]').focus();
 }

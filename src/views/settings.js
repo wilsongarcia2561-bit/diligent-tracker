@@ -2,7 +2,7 @@
 
 import { BMR_KCAL, DEFAULT_BREAK_MINUTES, MAX_HR, RESTING_HR } from '../data.js';
 import * as store from '../store.js';
-import { download, esc, kgToLb, lbToKg, num, toast, todayIso } from '../ui.js';
+import { confirmClick, esc, kgToLb, lbToKg, num, openTextPanel, toast, todayIso } from '../ui.js';
 
 export function render(root, { onChange }) {
   const s = store.getSettings();
@@ -73,7 +73,7 @@ export function render(root, { onChange }) {
       <h3>Your data</h3>
       <p class="muted">Everything is stored in this browser's local storage. Nothing leaves the machine — export regularly if the data matters.</p>
       <div class="btn-row">
-        <button type="button" class="btn" data-action="export">Export JSON backup</button>
+        <button type="button" class="btn" data-action="export">Back up (copy JSON)</button>
         <button type="button" class="btn ghost" data-action="import">Import JSON backup</button>
         <button type="button" class="btn danger" data-action="clear">Erase all data</button>
       </div>
@@ -125,11 +125,15 @@ export function render(root, { onChange }) {
       render(root, { onChange });
       onChange?.();
     } else if (action === 'export') {
-      download(`diligent3-backup-${todayIso()}.json`, store.exportJson());
+      openTextPanel({
+        title: 'Backup',
+        hint: `Everything this browser holds: every day, the weight log and settings. Paste it into a file named diligent3-backup-${todayIso()}.json to keep it; Import restores it.`,
+        text: store.exportJson(),
+      });
     } else if (action === 'import') {
       root.querySelector('#import-file').click();
     } else if (action === 'clear') {
-      if (confirm('Erase every logged day, weight reading and setting in this browser? This cannot be undone.')) {
+      if (confirmClick(e.target, 'Erase everything? Click again')) {
         store.clearAll();
         toast('All data erased', 'warn');
         render(root, { onChange });

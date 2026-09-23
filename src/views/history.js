@@ -1,8 +1,9 @@
-/** History log — every stored day, with its calculated TDEE, editable after the fact. */
+/** History — a statement ledger grouped by week, every day editable after the fact (§12.5). */
 
-import { MODEL_LABELS, calculateDay, formatDuration } from '../engine.js';
+import { groupByWeek, mainTask, trailingAverage } from '../analytics.js';
+import { MODEL_LABELS, calculateDay } from '../engine.js';
 import * as store from '../store.js';
-import { download, esc, kcal, num, prettyDate } from '../ui.js';
+import { esc, kcal, num, openTextPanel } from '../ui.js';
 
 function resolveWeight(entry) {
   if (entry.weightKg !== '' && Number(entry.weightKg) > 0) return entry;
@@ -15,30 +16,47 @@ export function calculatedEntries() {
     .map((entry) => ({ entry, calc: calculateDay(resolveWeight(entry), store.getSettings()) }));
 }
 
+/** Calculated days only, oldest first — the shape analytics.js works on. */
+export function calculatedDays() {
+  return calculatedEntries()
+    .map((r) => r.calc)
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function ledgerDate(iso) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return `${WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]}, ${MONTHS[m - 1]} ${d}`;
+}
+
+function weekLabel(iso) {
+  const [, m, d] = iso.split('-').map(Number);
+  return `Week of ${MONTHS[m - 1]} ${d}`;
+}
+
+function hm(minutes) {
+  const total = Math.round(minutes);
+  return `${Math.floor(total / 60)}h ${String(total % 60).padStart(2, '0')}`;
+}
+
+function signed(n) {
+  const r = Math.round(n);
+  return `${r > 0 ? '+' : r < 0 ? '−' : ''}${Math.abs(r).toLocaleString()}`;
+}
+
 function toCsv(rows) {
   const header = [
-    'date',
-    'rest_day',
-    'net_work_minutes',
-    'feels_like_f',
-    'sites',
-    'weight_kg',
-    'bmr',
-    'active_kcal',
-    'neat_kcal',
-    'tef_kcal',
-    'background_kcal',
-    'tdee_kcal',
-    'kcal_raw_comparison',
-    'intake_kcal',
-    'balance_kcal',
-    'models_used',
-    'flags',
+    'date', 'rest_day', 'main_task', 'net_work_minutes', 'feels_like_f', 'sites', 'weight_kg',
+    'bmr', 'active_kcal', 'neat_kcal', 'tef_kcal', 'background_kcal', 'tdee_kcal',
+    'kcal_raw_comparison', 'intake_kcal', 'balance_kcal', 'models_used', 'flags',
   ];
   const lines = rows.map(({ entry, calc }) =>
     [
       entry.date,
       calc.restDay ? 'yes' : 'no',
+      mainTask(calc),
       Math.round(calc.timing.netWorkMinutes),
       calc.feelsLikeF ?? '',
       calc.siteCount,
@@ -64,53 +82,93 @@ function toCsv(rows) {
   return [header.join(','), ...lines].join('\n');
 }
 
-export function render(root, { onEdit }) {
+export function exportCsv() {
   const rows = calculatedEntries();
+  if (!rows.length) return;
+  openTextPanel({
+    title: 'Export CSV',
+    hint: `${rows.length} day${rows.length === 1 ? '' : 's'}, one row each with every TDEE component broken out. Paste into a .csv file or straight into a spreadsheet.`,
+    text: toCsv(rows),
+  });
+}
+
+export function render(root, { onEdit }) {
+  const days = calculatedDays();
+
+  if (!days.length) {
+    root.innerHTML = `
+      <div class="empty-state">
+        <p class="eyebrow">History</p>
+        <h2>No days logged yet</h2>
+        <p class="muted">Log a day by hand, or bring in a whole month at once with <strong>Import from file</strong> on the Daily entry tab.</p>
+        <button type="button" class="btn primary" data-action="go-log">Open Daily entry</button>
+      </div>`;
+    root.addEventListener('click', (e) => {
+      if (e.target.closest('[data-action="go-log"]')) onEdit(null);
+    });
+    return;
+  }
+
+  const groups = groupByWeek(days);
+  const body = groups
+    .map((g) => {
+      const head = `
+        <tr class="week-row">
+          <th colspan="6" scope="rowgroup">${weekLabel(g.week)}</th>
+          <td colspan="2" class="week-meta">AVG <strong>${kcal(g.avg)}</strong> · ${g.workCount} work · ${g.restCount} rest</td>
+        </tr>`;
+      const rows = g.rows
+        .map((d) => {
+          const avg = trailingAverage(days, d.date);
+          const delta = avg === null ? null : d.tdee - avg;
+          const task = mainTask(d);
+          const warn = d.flags.filter((f) => f.level !== 'info').length;
+          return `
+            <tr class="ledger-row${d.restDay ? ' is-rest' : ''}" data-date="${d.date}">
+              <td class="col-date">
+                <button type="button" class="row-link" data-date="${d.date}">${ledgerDate(d.date)}</button>
+                ${warn ? `<span class="flag-dot" title="${warn} data-quality flag${warn === 1 ? '' : 's'} — open the day to review"></span>` : ''}
+              </td>
+              <td class="col-task${task ? '' : ' none'}" title="${esc(task)}">${esc(task || 'No task logged')}</td>
+              <td class="num">${d.restDay ? '–' : hm(d.timing.netWorkMinutes)}</td>
+              <td class="num">${d.restDay || d.feelsLikeF === null ? '–' : `${d.feelsLikeF}°F`}</td>
+              <td class="num">${d.restDay ? '–' : kcal(d.components.active)}</td>
+              <td class="num est">${kcal(d.components.neat + d.components.background)}</td>
+              <td class="num strong">${kcal(d.tdee)}</td>
+              <td class="num">${delta === null ? '<span class="faint">–</span>' : `<span class="delta-pill ${delta >= 0 ? 'up' : 'down'}">${signed(delta)}</span>`}</td>
+            </tr>`;
+        })
+        .join('');
+      return `<tbody>${head}${rows}</tbody>`;
+    })
+    .join('');
 
   root.innerHTML = `
-    <div class="card-head">
-      <h2>History log <span class="sec-ref">§12.5</span></h2>
-      <div class="btn-row">
-        <button type="button" class="btn ghost" data-action="export-csv" ${rows.length ? '' : 'disabled'}>Export CSV</button>
-      </div>
+    <div class="table-scroll">
+      <table class="ledger">
+        <thead>
+          <tr>
+            <th scope="col">Date</th>
+            <th scope="col">Main task</th>
+            <th scope="col" class="num">Net work</th>
+            <th scope="col" class="num">Feels-like</th>
+            <th scope="col" class="num">Active</th>
+            <th scope="col" class="num">Est. lines</th>
+            <th scope="col" class="num">TDEE</th>
+            <th scope="col" class="num">vs 7D</th>
+          </tr>
+        </thead>
+        ${body}
+      </table>
     </div>
-    ${
-      rows.length
-        ? `<table class="table history">
-            <thead>
-              <tr>
-                <th>Date</th><th class="right">Net work</th><th class="right">Feels-like</th>
-                <th class="right">Active</th><th class="right">Est. lines</th><th class="right">TDEE</th>
-                <th>Models</th><th class="right">Flags</th><th></th>
-              </tr>
-            </thead>
-            <tbody>
-              ${rows
-                .map(
-                  ({ entry, calc }) => `
-                <tr data-date="${entry.date}">
-                  <td><strong>${esc(prettyDate(entry.date))}</strong>${calc.restDay ? '<span class="sub">rest day</span>' : ''}</td>
-                  <td class="right">${calc.restDay ? '—' : formatDuration(calc.timing.netWorkMinutes)}</td>
-                  <td class="right">${calc.feelsLikeF === null ? '—' : `${calc.feelsLikeF}°F`}</td>
-                  <td class="right">${kcal(calc.components.active)}</td>
-                  <td class="right est">${kcal(calc.components.neat + calc.components.background)}</td>
-                  <td class="right strong">${kcal(calc.tdee)}</td>
-                  <td>${[...new Set(calc.phases.map((p) => MODEL_LABELS[p.model]))].map((m) => `<span class="pill ${m === 'KRI' ? 'kri' : 'intermediate'}">${m}</span>`).join('') || '—'}</td>
-                  <td class="right">${calc.flags.filter((f) => f.level !== 'info').length || '—'}</td>
-                  <td class="right"><button type="button" class="link-btn" data-action="edit" data-date="${entry.date}">Edit</button></td>
-                </tr>`,
-                )
-                .join('')}
-            </tbody>
-          </table>
-          <p class="muted small">Columns marked <span class="est">est.</span> combine post-work NEAT and background daily life — the two lowest-confidence lines in the framework.</p>`
-        : '<div class="empty">No days logged yet. Start on the <strong>Daily entry</strong> tab.</div>'
-    }
-  `;
+    <p class="footnote">
+      <span class="est-tag">EST</span> Est. lines = post-work NEAT + background daily life, the two lowest-confidence
+      components. vs 7D compares each day with the average of the 7 calendar days before it.
+      <span class="flag-dot"></span> marks a day with data-quality warnings.
+    </p>`;
 
   root.addEventListener('click', (e) => {
-    const action = e.target.dataset.action;
-    if (action === 'edit') onEdit(e.target.dataset.date);
-    if (action === 'export-csv') download('diligent3-history.csv', toCsv(rows), 'text/csv');
+    const row = e.target.closest('[data-date]');
+    if (row) onEdit(row.dataset.date);
   });
 }

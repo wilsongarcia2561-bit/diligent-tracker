@@ -23,40 +23,35 @@ import {
   calculateDay,
   suggestMet,
 } from '../engine.js';
-import { stackedBar } from '../charts.js';
+import { COMPONENTS, trailingAverage } from '../analytics.js';
 import { parseCalendarLog, splitDayBlocks } from '../calendarImport.js';
 import * as store from '../store.js';
-import { debounce, esc, kcal, num, pct, prettyDate, toast, todayIso } from '../ui.js';
+import { confirmClick, debounce, esc, kcal, num, pct, toast, todayIso } from '../ui.js';
+import { calculatedDays } from './history.js';
 
 let draft = null;
 let dirty = false;
+/** Trailing 7-day average for the open date. Other days don't change while
+ * this one is edited, so it's computed once per load, not per keystroke. */
+let trailing = null;
 
-const COMPONENT_COLORS = {
-  bmr: 'var(--c-bmr)',
-  active: 'var(--c-active)',
-  neat: 'var(--c-neat)',
-  tef: 'var(--c-tef)',
-  background: 'var(--c-bg)',
-};
+function setSaveState(state) {
+  const badge = document.getElementById('save-state');
+  if (!badge) return;
+  badge.dataset.state = state;
+  badge.textContent = state === 'saved' ? '● Saved' : '● Saving';
+}
 
 const save = debounce(() => {
   if (!draft || !draft.date) return;
   store.saveEntry(draft);
   dirty = false;
-  const badge = document.getElementById('save-state');
-  if (badge) {
-    badge.textContent = 'Saved';
-    badge.className = 'save-state saved';
-  }
+  setSaveState('saved');
 }, 500);
 
 function markDirty() {
   dirty = true;
-  const badge = document.getElementById('save-state');
-  if (badge) {
-    badge.textContent = 'Saving…';
-    badge.className = 'save-state pending';
-  }
+  setSaveState('pending');
   save();
 }
 
@@ -67,6 +62,7 @@ export function loadDate(date) {
     : { ...store.newEntry(date), weightKg: '' };
   if (!draft.phases || draft.phases.length === 0) draft.phases = [store.newPhase()];
   dirty = false;
+  trailing = trailingAverage(calculatedDays(), date);
 }
 
 export function getDraft() {
@@ -84,11 +80,11 @@ function field(label, inner, hint) {
 }
 
 function input(fieldName, value, attrs = '') {
-  return `<input data-field="${fieldName}" value="${esc(value ?? '')}" ${attrs}>`;
+  return `<input id="f-${fieldName}" data-field="${fieldName}" value="${esc(value ?? '')}" ${attrs}>`;
 }
 
 function phaseInput(id, fieldName, value, attrs = '') {
-  return `<input data-phase="${id}" data-field="${fieldName}" value="${esc(value ?? '')}" ${attrs}>`;
+  return `<input id="p-${id}-${fieldName}" data-phase="${id}" data-field="${fieldName}" value="${esc(value ?? '')}" ${attrs}>`;
 }
 
 function soilOptions(selected) {
@@ -145,7 +141,7 @@ function phaseCard(phase, index, calc) {
     }
 
     <div class="grid grid-4">
-      ${field('Soil class', `<select data-phase="${phase.id}" data-field="soilCode">${soilOptions(phase.soilCode)}</select>`)}
+      ${field('Soil class', `<select id="p-${phase.id}-soilCode" data-phase="${phase.id}" data-field="soilCode">${soilOptions(phase.soilCode)}</select>`)}
       ${field('MET', phaseInput(phase.id, 'met', phase.met, 'type="number" step="0.1" min="0" max="16" placeholder="6.5"'))}
       ${field('Start', phaseInput(phase.id, 'start', phase.start, 'type="time"'))}
       ${field('End', phaseInput(phase.id, 'end', phase.end, 'type="time"'))}
@@ -154,7 +150,7 @@ function phaseCard(phase, index, calc) {
     <div class="grid grid-3">
       ${field(
         'Model',
-        `<select data-phase="${phase.id}" data-field="modelOverride">
+        `<select id="p-${phase.id}-modelOverride" data-phase="${phase.id}" data-field="modelOverride">
           <option value="" data-automodel="${phase.id}" ${!phase.modelOverride ? 'selected' : ''}>Auto — ${esc(autoLabel)}</option>
           <option value="${MODEL.INTERMEDIATE}" ${phase.modelOverride === MODEL.INTERMEDIATE ? 'selected' : ''}>Force Intermediate</option>
           <option value="${MODEL.KRI}" ${phase.modelOverride === MODEL.KRI ? 'selected' : ''}>Force KRI</option>
@@ -168,7 +164,7 @@ function phaseCard(phase, index, calc) {
       )}
       ${field(
         'Sustained vigorous',
-        `<label class="check"><input type="checkbox" data-phase="${phase.id}" data-field="vigorous" ${phase.vigorous ? 'checked' : ''}> Forces KRI</label>`,
+        `<label class="check"><input type="checkbox" id="p-${phase.id}-vigorous" data-phase="${phase.id}" data-field="vigorous" ${phase.vigorous ? 'checked' : ''}> Forces KRI</label>`,
       )}
     </div>
 
@@ -177,7 +173,7 @@ function phaseCard(phase, index, calc) {
       <div class="grid grid-3">
         ${field('Watch BPM (peak)', phaseInput(phase.id, 'watchBpm', phase.watchBpm, 'type="number" min="40" max="220" placeholder="uncorrected"'))}
         ${field('Samsung active min', phaseInput(phase.id, 'samsungActiveMinutes', phase.samsungActiveMinutes, 'type="number" min="0" placeholder="cross-check only"'))}
-        ${field('Capture category', `<select data-phase="${phase.id}" data-field="captureCategory">${captureOptions(phase.captureCategory)}</select>`)}
+        ${field('Capture category', `<select id="p-${phase.id}-captureCategory" data-phase="${phase.id}" data-field="captureCategory">${captureOptions(phase.captureCategory)}</select>`)}
       </div>
       ${
         result && result.bpm
@@ -206,19 +202,20 @@ function formTemplate(entry, calc) {
   const shiftGross = durationMinutes(entry.shiftStart, entry.shiftEnd);
 
   return `
-  <div class="toolbar">
-    <div class="toolbar-left">
+  <div class="edit-head">
+    <div>
+      <p class="eyebrow">Inputs</p>
+      <h2>Edit day</h2>
+    </div>
+    <div class="toolbar">
       <label class="field inline">
         <span class="field-label">Date</span>
         <input type="date" id="entry-date" value="${esc(entry.date)}">
       </label>
-      <label class="check big"><input type="checkbox" data-field="restDay" ${entry.restDay ? 'checked' : ''}> Rest day (no work)</label>
-    </div>
-    <div class="toolbar-right">
-      <span id="save-state" class="save-state ${dirty ? 'pending' : 'saved'}">${dirty ? 'Saving…' : 'Saved'}</span>
+      <label class="check"><input type="checkbox" id="f-restDay" data-field="restDay" ${entry.restDay ? 'checked' : ''}> Rest day</label>
       <button type="button" class="btn ghost" data-action="import-file">Import from file</button>
       <input type="file" id="import-file-input" accept=".md,.markdown,.txt,.pdf" hidden>
-      <button type="button" class="btn ghost" data-action="delete-entry">Delete day</button>
+      <button type="button" class="btn danger" data-action="delete-entry">Delete day</button>
     </div>
   </div>
 
@@ -254,8 +251,6 @@ Date: 2026-09-19
 Shift: 7:56 AM - 11:51 AM
 ...</pre>
   </details>
-
-  <p class="day-title">${esc(prettyDate(entry.date))}</p>
 
   ${
     entry.restDay
@@ -293,8 +288,8 @@ Shift: 7:56 AM - 11:51 AM
       ${field('Bodyweight kg (fasted AM)', input('weightKg', entry.weightKg, 'type="number" step="0.1" min="0" placeholder="' + num(weightInEffect, 1) + '"'), `Using ${num(calc.weightKg, 1)} kg`)}
     </div>
     <div class="check-row">
-      <label class="check"><input type="checkbox" data-field="heatInferred" ${entry.heatInferred ? 'checked' : ''}> Heat ≥88°F inferred (not documented) — flags the day</label>
-      <label class="check"><input type="checkbox" data-field="outOfStateSupplyRun" ${entry.outOfStateSupplyRun ? 'checked' : ''}> Out-of-state supply run</label>
+      <label class="check"><input type="checkbox" id="f-heatInferred" data-field="heatInferred" ${entry.heatInferred ? 'checked' : ''}> Heat ≥88°F inferred (not documented) — flags the day</label>
+      <label class="check"><input type="checkbox" id="f-outOfStateSupplyRun" data-field="outOfStateSupplyRun" ${entry.outOfStateSupplyRun ? 'checked' : ''}> Out-of-state supply run</label>
     </div>
   </section>
 
@@ -313,11 +308,11 @@ Shift: 7:56 AM - 11:51 AM
 
   <section class="card">
     <h2>Estimated components <span class="sec-ref">§9 · §10 · §11</span></h2>
-    <p class="muted">These three lines are lower-confidence estimates and are shown dashed in the breakdown. Leave the kcal boxes blank to use the tier default.</p>
+    <p class="muted">These three lines are lower-confidence estimates and are tagged EST and hatched in the breakdown above. Leave the kcal boxes blank to use the tier default.</p>
     <div class="grid grid-2">
       ${field(
         'Post-work NEAT tier',
-        `<select data-field="neatTier">
+        `<select id="f-neatTier" data-field="neatTier">
           <option value="">Auto — ${esc(calc.neat.suggestion.label)}</option>
           ${NEAT_TIERS.map((t) => `<option value="${t.id}" ${entry.neatTier === t.id ? 'selected' : ''}>${esc(t.label)} (${t.min}–${t.max})</option>`).join('')}
         </select>`,
@@ -327,7 +322,7 @@ Shift: 7:56 AM - 11:51 AM
     <div class="grid grid-2">
       ${field(
         'Background daily life tier',
-        `<select data-field="backgroundTier">
+        `<select id="f-backgroundTier" data-field="backgroundTier">
           <option value="">Auto — ${esc(calc.background.suggestion.label)}</option>
           ${BACKGROUND_TIERS.map((t) => `<option value="${t.id}" ${entry.backgroundTier === t.id ? 'selected' : ''}>${esc(t.label)} (${t.kcal})</option>`).join('')}
         </select>`,
@@ -338,7 +333,7 @@ Shift: 7:56 AM - 11:51 AM
       ${field('Logged intake kcal', input('intakeKcal', entry.intakeKcal, 'type="number" min="0" step="1" placeholder="optional"'), 'Used for TEF adjustment and balance only')}
       ${field('TEF kcal override', input('tefKcal', entry.tefKcal, 'type="number" min="0" step="1" placeholder="' + kcal(calc.tef.kcal) + '"'), esc(calc.tef.suggestion.reason))}
     </div>
-    ${field('Notes', `<textarea data-field="notes" rows="3" placeholder="Calendar quirks, revisions, anything worth remembering">${esc(entry.notes)}</textarea>`)}
+    ${field('Notes', `<textarea id="f-notes" data-field="notes" rows="3" placeholder="Calendar quirks, revisions, anything worth remembering">${esc(entry.notes)}</textarea>`)}
   </section>
 
   <datalist id="task-list">
@@ -351,126 +346,114 @@ Shift: 7:56 AM - 11:51 AM
 /* -------------------------------- results -------------------------------- */
 
 function resultsTemplate(calc) {
-  const c = calc.components;
-  const segments = [
-    { label: 'BMR', value: c.bmr, color: 'var(--c-bmr)' },
-    { label: 'Active work', value: c.active, color: 'var(--c-active)' },
-    { label: 'Post-work NEAT', value: c.neat, color: 'var(--c-neat)', estimate: true },
-    { label: 'TEF', value: c.tef, color: 'var(--c-tef)' },
-    { label: 'Background', value: c.background, color: 'var(--c-bg)', estimate: true },
-  ];
+  const soilName = (code) => SOIL_CLASSES.find((s) => s.code === code)?.name || '';
+  const [y, m, d] = calc.date.split('-').map(Number);
+  const when = new Date(Date.UTC(y, m - 1, d))
+    .toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' })
+    .toUpperCase();
 
-  const rows = calc.phases
-    .map(
-      (p) => `<tr>
-        <td>${esc(p.description || '—')}${p.site ? `<span class="sub">${esc(p.site)}</span>` : ''}</td>
-        <td>${p.soilCode || '—'}</td>
-        <td class="right">${num(p.met, 1)}</td>
-        <td class="right">${formatDuration(p.netMinutes)}</td>
-        <td><span class="pill ${p.model}">${MODEL_LABELS[p.model]}</span>${p.modelOverridden ? '<span class="sub">manual</span>' : ''}</td>
-        <td class="right strong">${kcal(p.kcal)}</td>
-      </tr>`,
-    )
-    .join('');
+  const vs = trailing === null ? null : calc.tdee - trailing;
+  const signed = (n) => `${Math.round(n) > 0 ? '+' : Math.round(n) < 0 ? '−' : ''}${Math.abs(Math.round(n)).toLocaleString()}`;
+  const hm = (min) => `${Math.floor(Math.round(min) / 60)}h ${String(Math.round(min) % 60).padStart(2, '0')}m`;
+  const clock = (t) => (t ? t.replace(/^0/, '') : '');
+
+  const balance = calc.balance;
+  const balanceCard = balance === null
+    ? `<div class="mini"><span class="mini-label">Balance</span><span class="mini-val faint">—</span><span class="mini-sub">log intake to see it</span></div>`
+    : `<div class="mini ${balance < 0 ? 'tone-down' : 'tone-up'}"><span class="mini-label">${balance < 0 ? 'Deficit' : 'Surplus'}</span><span class="mini-val">${kcal(Math.abs(balance))}</span></div>`;
+
+  const maxNet = Math.max(1, ...calc.phases.map((p) => p.netMinutes));
+  const phaseRows = calc.phases.map((p, i) => `
+    <li class="phase-row">
+      <div class="phase-row-head">
+        <span class="idx">${String(i + 1).padStart(2, '0')}</span>
+        <span class="phase-name">${esc(p.description || 'Untitled phase')}</span>
+        <span class="pill model-${p.model}">${MODEL_LABELS[p.model]}</span>
+        <span class="phase-burn">${kcal(p.kcal)}</span>
+      </div>
+      <div class="phase-row-meta">
+        <span>${p.soilCode ? `${p.soilCode} · ${esc(soilName(p.soilCode))}` : '—'}</span>
+        <span>${hm(p.netMinutes)}</span>
+        <span class="meter"><span style="width:${((p.netMinutes / maxNet) * 100).toFixed(1)}%"></span></span>
+        <span>MET ${num(p.met, 1)}</span>
+      </div>
+    </li>`).join('');
+
+  const flags = calc.flags.length
+    ? calc.flags.map((f) => `<li class="flag ${f.level}"><span class="flag-dot"></span><span>${esc(f.text)}</span></li>`).join('')
+    : '<li class="flag ok"><span class="flag-dot"></span><span>No data-quality flags for this day.</span></li>';
+  const warnCount = calc.flags.filter((f) => f.level !== 'info').length;
 
   return `
-  <div class="result-head">
-    <div>
-      <span class="result-label">Estimated TDEE</span>
-      <div class="result-value">${kcal(calc.tdee)}<span class="unit">kcal</span></div>
-      <div class="result-uncertainty">±${DAY_UNCERTAINTY_KCAL.min}–${DAY_UNCERTAINTY_KCAL.max} kcal single-day precision</div>
+  <div class="result-grid">
+    <div class="result-main">
+      <p class="eyebrow">${when} · Estimated TDEE</p>
+      <div class="hero-num xl">${kcal(calc.tdee)}<span class="unit">kcal</span></div>
+      <p class="hero-note">±${DAY_UNCERTAINTY_KCAL.min}–${DAY_UNCERTAINTY_KCAL.max} kcal single-day precision</p>
+
+      <div class="mini-cards">
+        <div class="mini"><span class="mini-label">Intake</span><span class="mini-val${calc.intakeKcal ? '' : ' faint'}">${calc.intakeKcal ? kcal(calc.intakeKcal) : '—'}</span>${calc.intakeKcal ? '' : '<span class="mini-sub">not logged</span>'}</div>
+        ${balanceCard}
+        <div class="mini"><span class="mini-label">vs 7D avg</span><span class="mini-val ${vs === null ? 'faint' : vs >= 0 ? 'up' : 'down'}">${vs === null ? '—' : signed(vs)}</span>${vs === null ? '<span class="mini-sub">no days in the prior week</span>' : ''}</div>
+      </div>
+
+      <div class="stackbar tall" role="img" aria-label="Today's TDEE split by component">
+        ${COMPONENTS.map((c) => `<span class="${c.estimate ? 'est' : ''}" style="flex:${Math.max(0.001, calc.components[c.key] || 0)};--sw:${c.color}" title="${c.label}: ${kcal(calc.components[c.key])} kcal"></span>`).join('')}
+      </div>
+      <ul class="legend-grid">
+        ${COMPONENTS.map((c) => `<li><span class="swatch" style="--sw:${c.color}"></span><span>${c.label}${c.estimate ? ' <span class="est-tag">EST</span>' : ''}</span><strong>${kcal(calc.components[c.key])}</strong></li>`).join('')}
+      </ul>
     </div>
-    ${
-      calc.balance !== null
-        ? `<div class="balance ${calc.balance >= 0 ? 'surplus' : 'deficit'}">
-            <span class="result-label">${calc.balance >= 0 ? 'Surplus' : 'Deficit'}</span>
-            <div class="balance-value">${kcal(Math.abs(calc.balance))}</div>
-            <div class="sub">intake ${kcal(calc.intakeKcal)}</div>
-          </div>`
-        : ''
-    }
-  </div>
 
-  <div id="stack-host"></div>
-  <ul class="legend">
-    ${segments
-      .map(
-        (s) =>
-          `<li><span class="swatch${s.estimate ? ' est' : ''}" style="--sw:${s.color}"></span>${s.label} <strong>${kcal(s.value)}</strong>${s.estimate ? '<em>est.</em>' : ''}</li>`,
-      )
-      .join('')}
-  </ul>
+    <div class="result-side">
+      <div class="strip">
+        <div><span class="mini-label">Shift</span><span class="strip-val">${calc.restDay ? 'Rest day' : draft.shiftStart && draft.shiftEnd ? `${clock(draft.shiftStart)}–${clock(draft.shiftEnd)}` : '—'}</span></div>
+        <div><span class="mini-label">Net work</span><span class="strip-val">${calc.restDay ? '—' : hm(calc.timing.netWorkMinutes)}</span></div>
+        <div><span class="mini-label">Feels-like</span><span class="strip-val">${calc.feelsLikeF === null ? '—' : `${calc.feelsLikeF}°F`}</span></div>
+        <div><span class="mini-label">Sites</span><span class="strip-val">${calc.siteCount}</span></div>
+      </div>
 
-  ${
-    calc.phases.length
-      ? `<table class="table">
-          <thead><tr><th>Phase</th><th>Soil</th><th class="right">MET</th><th class="right">Net</th><th>Model</th><th class="right">kcal</th></tr></thead>
-          <tbody>${rows}</tbody>
-          <tfoot><tr><td colspan="5">Active work calories</td><td class="right strong">${kcal(calc.components.active)}</td></tr></tfoot>
-        </table>`
-      : ''
-  }
+      <div class="side-head">
+        <h3>Task phases</h3>
+        ${calc.restDay ? '' : '<button type="button" class="btn ghost sm" data-action="add-phase">+ Add phase</button>'}
+      </div>
+      ${calc.restDay
+        ? '<p class="side-empty">Rest day — no active work. NEAT, TEF and background daily life still count.</p>'
+        : calc.phases.length
+          ? `<ol class="phase-list">${phaseRows}</ol>`
+          : '<p class="side-empty">No task phases yet. Describe the work below and a MET is suggested automatically.</p>'}
 
-  ${
-    calc.phases.length
-      ? `<div class="comparison">
-          <h3>Model comparison <span class="sec-ref">§12.11</span></h3>
-          <table class="table compact">
-            <tbody>
-              <tr class="raw-row">
-                <td>${MODEL_LABELS[MODEL.RAW]}<span class="sub">${MODEL_FORMULAS[MODEL.RAW]}</span></td>
-                <td class="right">${kcal(calc.comparison[MODEL.RAW])}</td>
-                <td class="note">QA only — never added to BMR</td>
-              </tr>
-              <tr>
-                <td>${MODEL_LABELS[MODEL.INTERMEDIATE]}<span class="sub">${MODEL_FORMULAS[MODEL.INTERMEDIATE]}</span></td>
-                <td class="right">${kcal(calc.comparison[MODEL.INTERMEDIATE])}</td>
-                <td class="note">all phases as Intermediate</td>
-              </tr>
-              <tr>
-                <td>${MODEL_LABELS[MODEL.KRI]}<span class="sub">${MODEL_FORMULAS[MODEL.KRI]}</span></td>
-                <td class="right">${kcal(calc.comparison[MODEL.KRI])}</td>
-                <td class="note">all phases as KRI</td>
-              </tr>
-              <tr class="used-row">
-                <td><strong>Used</strong><span class="sub">${calc.comparison.mixed ? 'mixed per-phase selection' : 'single model across all phases'}</span></td>
-                <td class="right strong">${kcal(calc.comparison.used)}</td>
-                <td class="note">✓ applied to TDEE</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>`
-      : ''
-  }
+      ${calc.phases.length ? `
+      <details class="side-block">
+        <summary>Model comparison <span class="meta">§12.11</span></summary>
+        <table class="mini-table">
+          <tbody>
+            <tr class="raw-row"><td>${MODEL_LABELS[MODEL.RAW]}<span class="sub">${MODEL_FORMULAS[MODEL.RAW]} · QA only, never added to BMR</span></td><td class="num">${kcal(calc.comparison[MODEL.RAW])}</td></tr>
+            <tr><td>${MODEL_LABELS[MODEL.INTERMEDIATE]}<span class="sub">${MODEL_FORMULAS[MODEL.INTERMEDIATE]} · all phases</span></td><td class="num">${kcal(calc.comparison[MODEL.INTERMEDIATE])}</td></tr>
+            <tr><td>${MODEL_LABELS[MODEL.KRI]}<span class="sub">${MODEL_FORMULAS[MODEL.KRI]} · all phases</span></td><td class="num">${kcal(calc.comparison[MODEL.KRI])}</td></tr>
+            <tr class="used-row"><td>Used<span class="sub">${calc.comparison.mixed ? 'mixed per-phase selection' : 'single model across phases'} · applied to TDEE</span></td><td class="num strong">${kcal(calc.comparison.used)}</td></tr>
+          </tbody>
+        </table>
+      </details>` : ''}
 
-  ${
-    calc.flags.length
-      ? `<div class="flags">
-          <h3>Data quality <span class="sec-ref">§12.12</span></h3>
-          ${calc.flags.map((f) => `<div class="flag ${f.level}"><span class="flag-dot"></span>${esc(f.text)}</div>`).join('')}
-        </div>`
-      : '<div class="flags"><div class="flag ok"><span class="flag-dot"></span>No data-quality flags for this day.</div></div>'
-  }
-  `;
+      <details class="side-block" ${warnCount ? 'open' : ''}>
+        <summary>Data quality <span class="meta">${warnCount ? `${warnCount} warning${warnCount === 1 ? '' : 's'}` : `${calc.flags.length} note${calc.flags.length === 1 ? '' : 's'}`}</span></summary>
+        <ul class="flags">${flags}</ul>
+      </details>
+    </div>
+  </div>`;
 }
 
 export function refreshResults() {
   const host = document.getElementById('results');
   if (!host || !draft) return null;
   const calc = calculateDay(withResolvedWeight(draft), store.getSettings());
+  const open = [...host.querySelectorAll('details')].map((d) => d.open);
   host.innerHTML = resultsTemplate(calc);
-  const stackHost = document.getElementById('stack-host');
-  if (stackHost) {
-    stackHost.appendChild(
-      stackedBar([
-        { label: 'BMR', value: calc.components.bmr, color: 'var(--c-bmr)' },
-        { label: 'Active work', value: calc.components.active, color: 'var(--c-active)' },
-        { label: 'Post-work NEAT', value: calc.components.neat, color: 'var(--c-neat)', estimate: true },
-        { label: 'TEF', value: calc.components.tef, color: 'var(--c-tef)' },
-        { label: 'Background', value: calc.components.background, color: 'var(--c-bg)', estimate: true },
-      ]),
-    );
-  }
+  // Keep the reader's expanded/collapsed choice across live recalculation.
+  host.querySelectorAll('details').forEach((d, i) => {
+    if (open[i] !== undefined) d.open = open[i];
+  });
   // Derived values embedded in the form re-render in place, so the form itself
   // never has to be rebuilt (which would steal focus mid-edit).
   for (const p of calc.phases) {
@@ -501,17 +484,27 @@ function withResolvedWeight(entry) {
 export function render(root) {
   if (!draft) loadDate(todayIso());
   root.innerHTML = `
-    <div class="log-layout">
-      <form id="entry-form" class="entry-form" autocomplete="off"></form>
-      <aside class="results-panel"><div id="results"></div></aside>
-    </div>`;
+    <section id="results" class="entry-result" aria-live="polite"></section>
+    <form id="entry-form" class="entry-form" autocomplete="off"></form>`;
 
   const form = root.querySelector('#entry-form');
   rebuildForm(form);
 
+  form.addEventListener('submit', (e) => e.preventDefault());
   form.addEventListener('input', (e) => onFieldEvent(e, form));
   form.addEventListener('change', (e) => onFieldEvent(e, form));
   form.addEventListener('click', (e) => onClick(e, form));
+  // "+ Add phase" in the result summary lives outside the form.
+  root.querySelector('#results').addEventListener('click', (e) => {
+    if (!e.target.closest('[data-action="add-phase"]')) return;
+    draft.phases.push(store.newPhase());
+    markDirty();
+    rebuildForm(form);
+    const cards = form.querySelectorAll('.phase');
+    const last = cards[cards.length - 1];
+    last?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    last?.querySelector('[data-field="description"]')?.focus({ preventScroll: true });
+  });
 }
 
 function rebuildForm(form) {
@@ -739,11 +732,11 @@ function onClick(e, form) {
       rebuildForm(form);
     }
   } else if (action === 'delete-entry') {
-    if (confirm(`Delete the entry for ${draft.date}? This cannot be undone.`)) {
+    if (confirmClick(e.target, 'Delete this day?')) {
       store.deleteEntry(draft.date);
       loadDate(draft.date);
       rebuildForm(form);
-      toast('Entry deleted', 'warn');
+      toast(`Deleted ${draft.date}`, 'warn');
     }
   }
 }

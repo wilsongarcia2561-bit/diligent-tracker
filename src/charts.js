@@ -1,8 +1,13 @@
 /**
- * Minimal hand-rolled SVG charts — no charting library, no network fetches.
+ * Hand-rolled SVG charts — no charting library, no network fetches.
+ *
+ * Each chart draws at the host's real pixel width (not a stretched viewBox),
+ * so mono labels keep their shape; callers redraw on resize via observeWidth.
  */
 
 const NS = 'http://www.w3.org/2000/svg';
+const DAY_MS = 86400000;
+let gradientSeq = 0;
 
 function el(name, attrs = {}, text) {
   const node = document.createElementNS(NS, name);
@@ -13,165 +18,209 @@ function el(name, attrs = {}, text) {
   return node;
 }
 
-function niceBounds(min, max) {
-  if (!Number.isFinite(min) || !Number.isFinite(max)) return { min: 0, max: 1 };
-  if (min === max) return { min: min - 1, max: max + 1 };
-  const pad = (max - min) * 0.12;
-  return { min: min - pad, max: max + pad };
+function toTime(iso) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return Date.UTC(y, m - 1, d);
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+export function shortDate(iso) {
+  const [, m, d] = iso.split('-').map(Number);
+  return `${MONTHS[m - 1]} ${d}`;
+}
+
+const fmt = (v) => Math.round(v).toLocaleString();
+
+/** Round an axis to 1/2/2.5/5 × 10^n steps so every tick lands on a clean number. */
+export function niceScale(min, max, ticks = 4) {
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return { lo: 0, hi: 1, step: 1 };
+  if (min === max) {
+    min -= 100;
+    max += 100;
+  }
+  const raw = (max - min) / ticks;
+  const mag = 10 ** Math.floor(Math.log10(raw));
+  const norm = raw / mag;
+  const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 2.5 ? 2.5 : norm <= 5 ? 5 : 10) * mag;
+  return { lo: Math.floor(min / step) * step, hi: Math.ceil(max / step) * step, step };
+}
+
+/** Redraw `draw` whenever `host` changes width. Returns nothing; observers die with the node. */
+export function observeWidth(host, draw) {
+  let last = 0;
+  const run = () => {
+    const w = Math.round(host.clientWidth);
+    if (w && w !== last) {
+      last = w;
+      draw(w);
+    }
+  };
+  run();
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(run).observe(host);
 }
 
 /**
- * @param {Array<{name:string,points:Array<{date:string,value:number}>,color:string,dashed?:boolean,dots?:boolean}>} series
+ * Daily TDEE as a filled area with the rolling average dashed over it, on a
+ * true time axis (a logging gap shows as a gap, not a squeezed neighbour).
+ * Hovering snaps a crosshair to the nearest day.
  */
-export function lineChart(series, { height = 260, yLabel = '', valueFormat = (v) => Math.round(v) } = {}) {
-  const width = 720;
-  const pad = { top: 16, right: 16, bottom: 34, left: 56 };
-  const svg = el('svg', {
-    viewBox: `0 0 ${width} ${height}`,
-    class: 'chart',
-    preserveAspectRatio: 'none',
-    role: 'img',
-    'aria-label': yLabel || 'chart',
-  });
-
-  const all = series.flatMap((s) => s.points);
-  if (!all.length) {
-    svg.appendChild(el('text', { x: width / 2, y: height / 2, 'text-anchor': 'middle', class: 'chart-empty' }, 'No data yet'));
-    return svg;
-  }
-
-  const dates = [...new Set(all.map((p) => p.date))].sort();
-  const xIndex = new Map(dates.map((d, i) => [d, i]));
-  const bounds = niceBounds(Math.min(...all.map((p) => p.value)), Math.max(...all.map((p) => p.value)));
-
-  const plotW = width - pad.left - pad.right;
-  const plotH = height - pad.top - pad.bottom;
-  const x = (date) => pad.left + (dates.length === 1 ? plotW / 2 : (xIndex.get(date) / (dates.length - 1)) * plotW);
-  const y = (value) => pad.top + plotH - ((value - bounds.min) / (bounds.max - bounds.min)) * plotH;
-
-  // Gridlines + y axis labels
-  const ticks = 4;
-  for (let i = 0; i <= ticks; i += 1) {
-    const value = bounds.min + ((bounds.max - bounds.min) * i) / ticks;
-    const yy = y(value);
-    svg.appendChild(el('line', { x1: pad.left, x2: width - pad.right, y1: yy, y2: yy, class: 'chart-grid' }));
-    svg.appendChild(el('text', { x: pad.left - 8, y: yy + 4, 'text-anchor': 'end', class: 'chart-tick' }, valueFormat(value)));
-  }
-
-  // X axis labels — first, middle, last
-  const labelIdx = dates.length <= 2 ? dates.map((_, i) => i) : [0, Math.floor((dates.length - 1) / 2), dates.length - 1];
-  for (const i of [...new Set(labelIdx)]) {
-    svg.appendChild(
-      el('text', { x: x(dates[i]), y: height - 10, 'text-anchor': 'middle', class: 'chart-tick' }, dates[i].slice(5)),
-    );
-  }
-
-  for (const s of series) {
-    const pts = [...s.points].sort((a, b) => a.date.localeCompare(b.date));
-    if (!pts.length) continue;
-    const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(p.date).toFixed(1)},${y(p.value).toFixed(1)}`).join(' ');
-    svg.appendChild(
-      el('path', {
-        d,
-        fill: 'none',
-        stroke: s.color,
-        'stroke-width': s.dashed ? 2 : 2.5,
-        'stroke-dasharray': s.dashed ? '6 5' : null,
-        'stroke-linejoin': 'round',
-        'stroke-linecap': 'round',
-      }),
-    );
-    if (s.dots !== false) {
-      for (const p of pts) {
-        const dot = el('circle', {
-          cx: x(p.date),
-          cy: y(p.value),
-          r: p.restDay ? 5 : 3.5,
-          fill: p.restDay ? 'var(--surface)' : s.color,
-          stroke: s.color,
-          'stroke-width': 2,
-        });
-        dot.appendChild(el('title', {}, `${p.date}: ${valueFormat(p.value)}${p.restDay ? ' (rest day)' : ''}`));
-        svg.appendChild(dot);
-      }
+export function areaChart(host, points, rolling, { height = 300 } = {}) {
+  observeWidth(host, (width) => {
+    host.replaceChildren();
+    if (!points.length) {
+      const empty = document.createElement('div');
+      empty.className = 'chart-empty';
+      empty.textContent = 'No days logged in this range';
+      host.append(empty);
+      return;
     }
-  }
 
-  return svg;
-}
-
-export function barChart(bars, { height = 200, valueFormat = (v) => Math.round(v) } = {}) {
-  const width = 720;
-  const pad = { top: 16, right: 16, bottom: 40, left: 56 };
-  const svg = el('svg', { viewBox: `0 0 ${width} ${height}`, class: 'chart', preserveAspectRatio: 'none' });
-  const usable = bars.filter((b) => Number.isFinite(b.value));
-  if (!usable.length) {
-    svg.appendChild(el('text', { x: width / 2, y: height / 2, 'text-anchor': 'middle', class: 'chart-empty' }, 'No data yet'));
-    return svg;
-  }
-  const max = Math.max(...usable.map((b) => b.value)) * 1.15;
-  const plotW = width - pad.left - pad.right;
-  const plotH = height - pad.top - pad.bottom;
-  const slot = plotW / usable.length;
-  const barW = Math.min(120, slot * 0.55);
-
-  usable.forEach((b, i) => {
-    const h = (b.value / max) * plotH;
-    const cx = pad.left + slot * i + slot / 2;
-    svg.appendChild(
-      el('rect', {
-        x: cx - barW / 2,
-        y: pad.top + plotH - h,
-        width: barW,
-        height: Math.max(1, h),
-        rx: 4,
-        fill: b.color || 'var(--accent)',
-      }),
-    );
-    svg.appendChild(
-      el('text', { x: cx, y: pad.top + plotH - h - 6, 'text-anchor': 'middle', class: 'chart-value' }, valueFormat(b.value)),
-    );
-    svg.appendChild(el('text', { x: cx, y: height - 20, 'text-anchor': 'middle', class: 'chart-tick' }, b.label));
-    if (b.sub) {
-      svg.appendChild(el('text', { x: cx, y: height - 6, 'text-anchor': 'middle', class: 'chart-tick dim' }, b.sub));
+    const pad = { top: 10, right: 56, bottom: 30, left: 2 };
+    const plotW = width - pad.left - pad.right;
+    const plotH = height - pad.top - pad.bottom;
+    let t0 = toTime(points[0].date);
+    let t1 = toTime(points[points.length - 1].date);
+    if (t0 === t1) {
+      t0 -= DAY_MS;
+      t1 += DAY_MS;
     }
-  });
+    const values = [...points.map((p) => p.value), ...rolling.map((p) => p.value)];
+    const { lo, hi, step } = niceScale(Math.min(...values), Math.max(...values), 4);
+    const x = (iso) => pad.left + ((toTime(iso) - t0) / (t1 - t0)) * plotW;
+    const y = (v) => pad.top + (1 - (v - lo) / (hi - lo)) * plotH;
 
-  svg.appendChild(
-    el('line', { x1: pad.left, x2: width - pad.right, y1: pad.top + plotH, y2: pad.top + plotH, class: 'chart-grid' }),
-  );
-  return svg;
-}
+    const svg = el('svg', { width, height, class: 'chart', role: 'img', 'aria-label': 'Daily TDEE over time' });
+    const gid = `area-grad-${(gradientSeq += 1)}`;
+    const defs = el('defs');
+    const grad = el('linearGradient', { id: gid, x1: 0, y1: 0, x2: 0, y2: 1 });
+    grad.append(
+      el('stop', { offset: '0%', 'stop-color': 'var(--green)', 'stop-opacity': 0.28 }),
+      el('stop', { offset: '100%', 'stop-color': 'var(--green)', 'stop-opacity': 0 }),
+    );
+    defs.append(grad);
+    svg.append(defs);
 
-/** Horizontal stacked bar for the TDEE component breakdown. */
-export function stackedBar(segments, { height = 46 } = {}) {
-  const width = 720;
-  const svg = el('svg', { viewBox: `0 0 ${width} ${height}`, class: 'chart stack', preserveAspectRatio: 'none' });
-  const total = segments.reduce((s, seg) => s + Math.max(0, seg.value), 0);
-  if (total <= 0) return svg;
-  let x = 0;
-  for (const seg of segments) {
-    const w = (Math.max(0, seg.value) / total) * width;
-    const rect = el('rect', {
-      x,
-      y: 8,
-      width: Math.max(0, w - 2),
-      height: height - 16,
-      rx: 3,
-      fill: seg.color,
-      opacity: seg.estimate ? 0.55 : 1,
-      stroke: seg.estimate ? seg.color : null,
-      'stroke-dasharray': seg.estimate ? '4 3' : null,
-      'stroke-width': seg.estimate ? 1.5 : null,
+    for (let v = lo; v <= hi + 1e-9; v += step) {
+      const yy = y(v);
+      svg.append(el('line', { x1: pad.left, x2: pad.left + plotW, y1: yy, y2: yy, class: 'grid' }));
+      svg.append(el('text', { x: width - 2, y: yy + 4, 'text-anchor': 'end', class: 'tick' }, fmt(v)));
+    }
+
+    const labelCount = Math.max(2, Math.min(6, Math.floor(plotW / 110)));
+    for (let i = 0; i < labelCount; i += 1) {
+      const t = t0 + ((t1 - t0) * i) / (labelCount - 1);
+      const iso = new Date(t).toISOString().slice(0, 10);
+      const anchor = i === 0 ? 'start' : i === labelCount - 1 ? 'end' : 'middle';
+      svg.append(el('text', { x: pad.left + (plotW * i) / (labelCount - 1), y: height - 8, 'text-anchor': anchor, class: 'tick' }, shortDate(iso)));
+    }
+
+    const line = points.map((p, i) => `${i ? 'L' : 'M'}${x(p.date).toFixed(1)},${y(p.value).toFixed(1)}`).join('');
+    const base = pad.top + plotH;
+    svg.append(el('path', { d: `${line}L${x(points.at(-1).date).toFixed(1)},${base}L${x(points[0].date).toFixed(1)},${base}Z`, fill: `url(#${gid})` }));
+    if (rolling.length > 1) {
+      const roll = rolling.map((p, i) => `${i ? 'L' : 'M'}${x(p.date).toFixed(1)},${y(p.value).toFixed(1)}`).join('');
+      svg.append(el('path', { d: roll, class: 'roll-line', fill: 'none' }));
+    }
+    svg.append(el('path', { d: line, class: 'area-line', fill: 'none' }));
+    const last = points.at(-1);
+    svg.append(el('circle', { cx: x(last.date), cy: y(last.value), r: 3.5, class: 'end-dot' }));
+
+    const cross = el('line', { y1: pad.top, y2: base, class: 'crosshair', visibility: 'hidden' });
+    const dot = el('circle', { r: 4.5, class: 'hover-dot', visibility: 'hidden' });
+    svg.append(cross, dot);
+    host.append(svg);
+
+    const tip = document.createElement('div');
+    tip.className = 'chart-tip';
+    tip.hidden = true;
+    host.append(tip);
+
+    const rollingByDate = new Map(rolling.map((p) => [p.date, p.value]));
+    const xs = points.map((p) => x(p.date));
+    const hide = () => {
+      cross.setAttribute('visibility', 'hidden');
+      dot.setAttribute('visibility', 'hidden');
+      tip.hidden = true;
+    };
+    svg.addEventListener('pointerleave', hide);
+    svg.addEventListener('pointermove', (e) => {
+      const px = e.clientX - svg.getBoundingClientRect().left;
+      let best = 0;
+      for (let i = 1; i < xs.length; i += 1) if (Math.abs(xs[i] - px) < Math.abs(xs[best] - px)) best = i;
+      const p = points[best];
+      const cx = xs[best];
+      const cy = y(p.value);
+      cross.setAttribute('x1', cx);
+      cross.setAttribute('x2', cx);
+      cross.setAttribute('visibility', 'visible');
+      dot.setAttribute('cx', cx);
+      dot.setAttribute('cy', cy);
+      dot.setAttribute('visibility', 'visible');
+      const avg = rollingByDate.get(p.date);
+      tip.innerHTML = `<span class="tip-date">${shortDate(p.date)}${p.restDay ? ' · rest' : ''}</span>`
+        + `<span class="tip-val">${fmt(p.value)} <small>kcal</small></span>`
+        + (avg ? `<span class="tip-sub">7d avg ${fmt(avg)}</span>` : '');
+      tip.hidden = false;
+      const left = Math.min(Math.max(cx - tip.offsetWidth / 2, 0), width - tip.offsetWidth);
+      tip.style.left = `${left}px`;
+      tip.style.top = `${Math.max(cy - tip.offsetHeight - 14, 0)}px`;
     });
-    rect.appendChild(el('title', {}, `${seg.label}: ${Math.round(seg.value)} kcal${seg.estimate ? ' (lower-confidence estimate)' : ''}`));
-    svg.appendChild(rect);
-    if (w > 46) {
-      svg.appendChild(
-        el('text', { x: x + w / 2 - 1, y: height / 2 + 4, 'text-anchor': 'middle', class: 'stack-label' }, Math.round(seg.value)),
-      );
-    }
-    x += w;
-  }
+  });
+}
+
+/** Small trend line with an emphasized endpoint. */
+export function sparkline(values, color, { width = 120, height = 34 } = {}) {
+  const svg = el('svg', { width, height, class: 'spark', 'aria-hidden': 'true' });
+  if (values.length < 2) return svg;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const span = max - min || 1;
+  const pts = values.map((v, i) => [2 + (i / (values.length - 1)) * (width - 6), 3 + (1 - (v - min) / span) * (height - 6)]);
+  svg.append(el('polyline', { points: pts.map((p) => p.map((n) => n.toFixed(1)).join(',')).join(' '), fill: 'none', stroke: color, 'stroke-width': 1.5, 'stroke-linejoin': 'round' }));
+  const [ex, ey] = pts.at(-1);
+  svg.append(el('circle', { cx: ex, cy: ey, r: 2.5, fill: color }));
   return svg;
+}
+
+/**
+ * Weekly candles: body = change in weekly average vs the week before,
+ * wick = lowest to highest single day. Shows as many recent weeks as fit.
+ */
+export function candleChart(host, candles, { height = 260 } = {}) {
+  observeWidth(host, (width) => {
+    host.replaceChildren();
+    if (!candles.length) {
+      const empty = document.createElement('div');
+      empty.className = 'chart-empty';
+      empty.textContent = 'No weeks logged in this range';
+      host.append(empty);
+      return;
+    }
+    const fit = Math.max(3, Math.floor(width / 64));
+    const shown = candles.slice(-fit);
+    const pad = { top: 10, bottom: 46 };
+    const plotH = height - pad.top - pad.bottom;
+    const lo = Math.min(...shown.map((c) => Math.min(c.low, c.open)));
+    const hi = Math.max(...shown.map((c) => Math.max(c.high, c.open)));
+    const span = hi - lo || 1;
+    const y = (v) => pad.top + (1 - (v - lo) / span) * plotH;
+    const slot = width / shown.length;
+    const bodyW = Math.min(52, slot * 0.5);
+
+    const svg = el('svg', { width, height, class: 'chart', role: 'img', 'aria-label': 'Weekly TDEE range' });
+    shown.forEach((c, i) => {
+      const cx = slot * i + slot / 2;
+      const tone = c.up ? 'up' : 'down';
+      svg.append(el('line', { x1: cx, x2: cx, y1: y(c.high), y2: y(c.low), class: `wick ${tone}` }));
+      const top = y(Math.max(c.open, c.close));
+      const h = Math.max(3, Math.abs(y(c.open) - y(c.close)));
+      const body = el('rect', { x: cx - bodyW / 2, y: top, width: bodyW, height: h, rx: 2, class: `body ${tone}` });
+      body.append(el('title', {}, `Week of ${shortDate(c.week)}: avg ${fmt(c.avg)}, range ${fmt(c.low)}–${fmt(c.high)} over ${c.days} day${c.days === 1 ? '' : 's'}`));
+      svg.append(body);
+      svg.append(el('text', { x: cx, y: height - 24, 'text-anchor': 'middle', class: 'candle-val' }, fmt(c.avg)));
+      svg.append(el('text', { x: cx, y: height - 8, 'text-anchor': 'middle', class: 'tick' }, shortDate(c.week)));
+    });
+    host.append(svg);
+  });
 }
