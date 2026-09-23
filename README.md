@@ -1,6 +1,7 @@
-# Diligent III — TDEE Tracker
+# Diligent IV — TDEE Tracker
 
-A local web app implementing the **Diligent III TDEE Tracking Framework** spec. Everything runs
+A local web app implementing **DILIGENT IV — TDEE Methodology & Dataset** (revised Sept 23, 2026),
+which supersedes the Diligent III framework spec. Everything runs
 in the browser: no build step, no dependencies, no network calls, no accounts. Data lives in the
 browser's `localStorage`.
 
@@ -35,17 +36,19 @@ totals and trend aggregation. No dependencies; uses Node's built-in test runner.
 recalculated from Mifflin-St Jeor or any other population formula. Editable in Settings only for
 when a new DEXA or working BIA reading supersedes it.
 
-**Active work calories (§3).** Model selection is **per task phase, not per day**. Each phase
-independently gets KRI if its MET ≥ 6.5, *or* the day's feels-like ≥ 88°F, *or* its soil class is
-HC/HCP/SRW, *or* it's flagged sustained-vigorous — otherwise Intermediate. The reason for each
-KRI assignment is shown under the phase's model selector, and the auto-selection can be
-overridden per phase (overrides are flagged in the data-quality list).
+**Active work calories (§3).** Intermediate, `(MET − 1.0) × kg × hrs`, is the only active model —
+all intensities, all work days. KRI was retired on Sept 3, 2026 and every day is restated under
+Intermediate; the model-comparison panel shows what KRI would have given (≈ 29 kcal per active
+hour more), and a phase stored with a forced-KRI override from before is restated and flagged.
+Heat ≥ 88°F only confirms upper-range MET picks; it no longer changes the model.
 
 **Kcal Raw is never added to BMR.** It appears only in the model-comparison table, greyed out and
 labelled "QA only", because it double-counts the ~113 kcal/hr resting floor.
 
 **Net work time (§8).** `(shift end − shift start) − lunch − breaks − non-work transit`. Breaks
-default to 11 min per session when exact timestamps aren't logged. Net time is then allocated
+default to ~10 min per session when only a count is logged, and every day that relies on it says
+so. Only the part of a logged lunch that falls inside the shift is subtracted, so an afternoon
+shift that starts as lunch ends loses nothing to it. Net time is then allocated
 across phases proportionally by gross phase length — matching the spec's rule for spreading
 breaks and lunch across multi-site days — unless a phase has exact net minutes entered, in which
 case only the remainder is prorated. Work embedded in a lunch block is split out via the
@@ -56,7 +59,20 @@ intensity and site count, and both are overridable. They are visually distinguis
 dashed segments in the breakdown bar, an `est.` marker in the legend, a separate column in the
 history table — because they're the lowest-confidence lines in the framework.
 
-**TEF (§10).** 210 kcal standard. If a daily intake is logged and differs from the 2,000 kcal
+**Non-work / university days (§7).** Tick *Non-work day*: BMR + walking (MET 3.3, from the step
+count, 8,500 steps ≈ 1.4 hr when blank) + ~95 general-day NEAT + ~200 TEF, with no background
+bucket — ~1,950 kcal, still unvalidated.
+
+**BPM cross-check (§5).** Runs both directions: a corrected HRR below the task MET is a
+`revise-down` verdict with the same warning weight as `revise-up`.
+
+**Reconciling with the document (§6, §12).** Days listed in DILIGENT IV's hand-computed dataset
+show the document's figure and the difference in their data-quality panel (a warning past
+±300 kcal), and the CSV export carries a `diligent_iv_tdee` column. The importer also flags the
+§8 standing problems it can see in calendar text: a `"half."` title, a start_time inside the
+logged lunch or before 4 AM, an empty `1.)` task item, and a downward BPM revision.
+
+**TEF (§2).** 210 kcal standard. If a daily intake is logged and differs from the 2,000 kcal
 baseline by more than 15%, TEF is re-suggested at 10% of actual intake. Overridable.
 
 **Bodyweight (§4).** Seeded with the documented history (56.6 → 55.7 → 57.6 kg). Each day's
@@ -69,7 +85,7 @@ the weight that was actually in effect. A per-entry fasted-morning weight also w
 |---|---|---|
 | §12.1 | Daily entry form — shift, lunch, breaks, weather, sites, tasks, bodyweight | ✅ |
 | §12.2 | Auto MET suggestion from task keywords, editable | ✅ |
-| §12.3 | Intermediate/KRI auto-selection per phase, override-able | ✅ |
+| §3 | Intermediate on every phase (KRI retired Sept 3; restatement shown) | ✅ |
 | §12.4 | Full TDEE calculation engine | ✅ |
 | §12.5 | History log, persistent and editable after the fact | ✅ |
 | — | Calendar-log import (.md/.txt/.pdf) — fills known fields, leaves the rest blank | ✅ |

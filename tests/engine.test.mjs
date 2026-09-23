@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  ACTIVE_MODEL,
   MODEL,
   activeKcal,
   allocatePhaseMinutes,
@@ -15,13 +16,13 @@ import {
   modelOffset,
   parseTime,
   rollingAverage,
-  selectModel,
   suggestBackgroundTier,
   suggestMet,
   suggestNeatTier,
   suggestTef,
   summarizeTrends,
   validateWithBpm,
+  walkingKcal,
 } from '../src/engine.js';
 
 const SETTINGS = { bmr: 1436, breakMinutesDefault: 11, restingHr: 49, maxHr: 201, weightKg: 57.6 };
@@ -31,40 +32,9 @@ const close = (actual, expected, tol = 0.01) =>
 
 /* ------------------------------------------------------------------ */
 
-describe('§3 model selection', () => {
-  it('uses Intermediate below MET 6.5 in cool conditions', () => {
-    const { model, reasons } = selectModel({ met: 5.0, feelsLikeF: 80, soilCode: 'SC' });
-    assert.equal(model, MODEL.INTERMEDIATE);
-    assert.deepEqual(reasons, []);
-  });
-
-  it('uses KRI at MET 6.5 exactly', () => {
-    assert.equal(selectModel({ met: 6.5, feelsLikeF: 70 }).model, MODEL.KRI);
-  });
-
-  it('uses KRI on heat alone at exactly 88°F feels-like', () => {
-    const { model, reasons } = selectModel({ met: 4.5, feelsLikeF: 88 });
-    assert.equal(model, MODEL.KRI);
-    assert.match(reasons[0], /Feels-like 88/);
-  });
-
-  it('does not trigger KRI at 87°F', () => {
-    assert.equal(selectModel({ met: 4.5, feelsLikeF: 87 }).model, MODEL.INTERMEDIATE);
-  });
-
-  it('uses KRI for HC/HCP/SRW soil regardless of MET and heat', () => {
-    for (const code of ['HC', 'HCP', 'SRW']) {
-      assert.equal(selectModel({ met: 3.0, feelsLikeF: 60, soilCode: code }).model, MODEL.KRI, code);
-    }
-    assert.equal(selectModel({ met: 3.0, feelsLikeF: 60, soilCode: 'MC' }).model, MODEL.INTERMEDIATE);
-  });
-
-  it('uses KRI for a sustained vigorous day', () => {
-    assert.equal(selectModel({ met: 4.0, feelsLikeF: 70, vigorous: true }).model, MODEL.KRI);
-  });
-
-  it('ignores an undocumented feels-like value rather than guessing', () => {
-    assert.equal(selectModel({ met: 5.0, feelsLikeF: null }).model, MODEL.INTERMEDIATE);
+describe('§3 model — KRI retired Sept 3', () => {
+  it('uses Intermediate as the only active model', () => {
+    assert.equal(ACTIVE_MODEL, MODEL.INTERMEDIATE);
   });
 });
 
@@ -127,6 +97,16 @@ describe('§8 net work time', () => {
     assert.equal(t.lunchMinutes, 30);
     assert.equal(t.breakMinutes, 22);
     assert.equal(t.netWorkMinutes, 540 - 30 - 22 - 20);
+  });
+
+  it('subtracts only the part of lunch that falls inside the shift', () => {
+    const before = computeNetWorkMinutes({ shiftStart: '13:16', shiftEnd: '15:52', lunchStart: '12:22', lunchEnd: '13:16', breakCount: 3 }, 10);
+    assert.equal(before.lunchMinutes, 0);
+    assert.equal(before.netWorkMinutes, 156 - 30);
+    const straddling = computeNetWorkMinutes({ shiftStart: '07:00', shiftEnd: '12:30', lunchStart: '12:00', lunchEnd: '13:00' }, 10);
+    assert.equal(straddling.lunchMinutes, 30);
+    const inside = computeNetWorkMinutes({ shiftStart: '07:00', shiftEnd: '15:00', lunchStart: '12:00', lunchEnd: '12:30' }, 10);
+    assert.equal(inside.lunchMinutes, 30);
   });
 
   it('defaults breaks to 11 min per session and marks them estimated', () => {
@@ -269,9 +249,18 @@ describe('§6 BPM correction and HRR', () => {
     assert.match(r.message, /Revise task MET upward/);
   });
 
-  it('keeps the task MET when BPM reads lower rather than silently reducing it', () => {
+  it('revises downward when BPM reads lower — the cross-check runs both directions', () => {
     const r = validateWithBpm({ watchBpm: 95, taskMet: 9.0 });
-    assert.equal(r.verdict, 'below');
+    assert.equal(r.verdict, 'revise-down');
+    assert.match(r.message, /downward from 9/);
+  });
+
+  it('flags a downward BPM disagreement as prominently as an upward one', () => {
+    const calc = calculateDay({
+      date: '2026-09-05', shiftStart: '07:00', shiftEnd: '15:00', weightKg: 57.6,
+      phases: [{ id: 'a', description: 'paver install', met: 9.0, watchBpm: 95 }],
+    }, SETTINGS);
+    assert.ok(calc.flags.some((f) => f.level === 'warn' && /downward from 9/.test(f.text)));
   });
 });
 
@@ -365,18 +354,18 @@ describe('§1 full-day calculation', () => {
     assert.equal(tef, 210);
   });
 
-  it('applies KRI to both phases when feels-like is ≥88°F', () => {
+  it('applies Intermediate to every phase, whatever the heat, soil or MET', () => {
     const calc = calculateDay(baseDay, SETTINGS);
-    assert.equal(calc.phases[0].model, MODEL.KRI);
-    assert.equal(calc.phases[1].model, MODEL.KRI);
-    assert.match(calc.phases[1].kriReasons.join(), /Feels-like 95/);
+    assert.equal(calc.feelsLikeF, 95);
+    assert.equal(calc.phases[0].soilCode, 'HC');
+    assert.ok(calc.phases.every((p) => p.model === MODEL.INTERMEDIATE));
+    assert.equal(calc.components.active, calc.comparison[MODEL.INTERMEDIATE]);
   });
 
-  it('mixes models per phase when the day is cool', () => {
-    const calc = calculateDay({ ...baseDay, feelsLikeF: 78 }, SETTINGS);
-    assert.equal(calc.phases[0].model, MODEL.KRI, 'HC soil forces KRI');
-    assert.equal(calc.phases[1].model, MODEL.INTERMEDIATE, 'MET 4.8 in cool weather stays Intermediate');
-    assert.equal(calc.comparison.mixed, true);
+  it('shows the KRI restatement impact as ~0.5 × kg per active hour', () => {
+    const calc = calculateDay(baseDay, SETTINGS);
+    const hours = calc.phases.reduce((s, p) => s + p.hours, 0);
+    close(calc.comparison[MODEL.KRI] - calc.comparison[MODEL.INTERMEDIATE], 0.5 * 57.6 * hours, 0.01);
   });
 
   it('reproduces the active kcal by hand', () => {
@@ -385,7 +374,7 @@ describe('§1 full-day calculation', () => {
     const netA = (488 * 300) / 510;
     const netB = (488 * 210) / 510;
     close(calc.phases[0].netMinutes, netA, 0.01);
-    close(calc.phases[0].kcal, (7.2 - 0.5) * 57.6 * (netA / 60), 0.01);
+    close(calc.phases[0].kcal, (7.2 - 1.0) * 57.6 * (netA / 60), 0.01);
     close(calc.phases[1].kcal, (4.8 - 1.0) * 57.6 * (netB / 60), 0.01);
   });
 
@@ -395,23 +384,47 @@ describe('§1 full-day calculation', () => {
     assert.equal(calc.components.active, calc.comparison.used);
   });
 
-  it('honours a manual model override and flags it', () => {
-    const day = {
-      ...baseDay,
-      feelsLikeF: 78,
-      phases: [{ ...baseDay.phases[1], modelOverride: MODEL.KRI }],
-    };
+  it('restates a phase stored with a forced KRI model under Intermediate, and says so', () => {
+    const day = { ...baseDay, phases: [{ ...baseDay.phases[1], modelOverride: MODEL.KRI }] };
     const calc = calculateDay(day, SETTINGS);
-    assert.equal(calc.phases[0].model, MODEL.KRI);
-    assert.equal(calc.phases[0].modelOverridden, true);
-    assert.ok(calc.flags.some((f) => /model manually set/.test(f.text)));
+    assert.equal(calc.phases[0].model, MODEL.INTERMEDIATE);
+    assert.ok(calc.flags.some((f) => /restated under Intermediate/.test(f.text)));
   });
 
-  it('zeroes active work on a rest day but keeps the other components', () => {
+  it('§7: a non-work day is BMR + walking + general NEAT + TEF, with no background bucket', () => {
     const calc = calculateDay({ ...baseDay, restDay: true }, SETTINGS);
-    assert.equal(calc.components.active, 0);
     assert.equal(calc.phases.length, 0);
-    close(calc.tdee, 1436 + 75 + 210 + 225, 0.001);
+    assert.equal(calc.components.background, 0);
+    assert.equal(calc.components.neat, 95);
+    assert.equal(calc.components.tef, 200);
+    // 8,500 steps ≈ 1.4 hr at MET 3.3 → (3.3 − 1) × 57.6 × 1.4
+    close(calc.components.active, 2.3 * 57.6 * 1.4, 0.01);
+    assert.ok(calc.tdee > 1900 && calc.tdee < 1960, `non-work day ${calc.tdee} should land near ~1,950`);
+  });
+
+  it('§7: walking scales with the logged step count', () => {
+    close(walkingKcal({ steps: 12140, kg: 57.6 }).hours, 2.0, 0.01);
+    const lazy = calculateDay({ ...baseDay, restDay: true, steps: 3000 }, SETTINGS);
+    const busy = calculateDay({ ...baseDay, restDay: true, steps: 12000 }, SETTINGS);
+    assert.ok(busy.components.active > lazy.components.active * 3.9);
+  });
+
+  it('§8: a shift with no task description is an error, not a quiet zero', () => {
+    const calc = calculateDay({ ...baseDay, phases: [] }, SETTINGS);
+    assert.ok(calc.flags.some((f) => f.level === 'error' && /no task description/.test(f.text)));
+  });
+
+  it('§6: reconciles a stored day against the DILIGENT IV dataset', () => {
+    const calc = calculateDay({ ...baseDay, date: '2026-09-10' }, SETTINGS);
+    assert.equal(calc.dataset.tdee, 2274);
+    assert.ok(calc.flags.some((f) => /DILIGENT IV §6 records ~2,274/.test(f.text)));
+    const unusable = calculateDay({ ...baseDay, date: '2026-08-28' }, SETTINGS);
+    assert.ok(unusable.flags.some((f) => /marks this day unusable/.test(f.text)));
+  });
+
+  it('passes importer data-quality flags through', () => {
+    const calc = calculateDay({ ...baseDay, importFlags: [{ level: 'warn', text: '"half." title' }] }, SETTINGS);
+    assert.ok(calc.flags.some((f) => f.text === '"half." title'));
   });
 
   it('uses the per-entry weight over the settings default', () => {
@@ -427,7 +440,7 @@ describe('§1 full-day calculation', () => {
 
   it('flags an inferential heat trigger', () => {
     const calc = calculateDay({ ...baseDay, feelsLikeF: '', heatInferred: true }, SETTINGS);
-    assert.ok(calc.flags.some((f) => /inferentially/.test(f.text)));
+    assert.ok(calc.flags.some((f) => /inferred, not documented/.test(f.text)));
   });
 
   it('flags a day with no BPM data', () => {

@@ -1,5 +1,5 @@
 /**
- * Diligent III — TDEE calculation engine.
+ * Diligent IV — TDEE calculation engine.
  *
  * Pure functions only: no DOM, no storage. Everything here implements the spec
  * directly and is covered by tests/engine.test.mjs.
@@ -15,13 +15,14 @@ import {
   BMR_KCAL,
   BPM_CORRECTIONS,
   CAPTURE_CATEGORIES,
+  DATASET_IV,
   DEFAULT_BREAK_MINUTES,
   HEAT_TRIGGER_F,
   HRR_MET_TABLE,
-  KRI_MET_THRESHOLD,
-  KRI_SOIL_CODES,
+  KRI_RETIRED_ON,
   MAX_HR,
   NEAT_TIERS,
+  NON_WORK_DAY,
   RESTING_HR,
   SOIL_CLASSES,
   SOIL_KEYWORDS,
@@ -39,7 +40,7 @@ export const MODEL = {
 export const MODEL_LABELS = {
   [MODEL.RAW]: 'Kcal Raw',
   [MODEL.INTERMEDIATE]: 'Intermediate',
-  [MODEL.KRI]: 'KRI',
+  [MODEL.KRI]: 'KRI (retired)',
 };
 
 export const MODEL_FORMULAS = {
@@ -94,36 +95,16 @@ export function modelOffset(model) {
 }
 
 /**
- * §3 — Model selection is per-task, not per-day. A single day can have multiple
- * task phases, each independently assigned Intermediate or KRI.
- *
- * KRI applies when MET ≥ 6.5, OR feels-like ≥ 88°F, OR the soil classification is
- * HC/HCP/SRW, OR the phase is flagged as a sustained vigorous effort.
+ * §3.1 — Intermediate is the only active model: applied at all intensities, on
+ * all work days. KRI was retired on Sept 3, 2026 and every day is restated
+ * under Intermediate; it survives here only to show the restatement impact
+ * (≈ 0.5 × kg per active hour, ~29 kcal/hr at 57.6 kg).
  */
-export function selectModel({ met, feelsLikeF = null, soilCode = '', vigorous = false } = {}) {
-  const reasons = [];
-  const metValue = Number(met);
-  if (Number.isFinite(metValue) && metValue >= KRI_MET_THRESHOLD) {
-    reasons.push(`MET ${metValue} ≥ ${KRI_MET_THRESHOLD}`);
-  }
-  if (feelsLikeF !== null && feelsLikeF !== '' && Number(feelsLikeF) >= HEAT_TRIGGER_F) {
-    reasons.push(`Feels-like ${Number(feelsLikeF)}°F ≥ ${HEAT_TRIGGER_F}°F`);
-  }
-  if (soilCode && KRI_SOIL_CODES.includes(soilCode)) {
-    reasons.push(`${soilCode} soil classification`);
-  }
-  if (vigorous) {
-    reasons.push('Sustained vigorous day');
-  }
-  return {
-    model: reasons.length ? MODEL.KRI : MODEL.INTERMEDIATE,
-    reasons,
-  };
-}
+export const ACTIVE_MODEL = MODEL.INTERMEDIATE;
 
 /**
  * Active work calories for one phase under one model.
- * Kcal Raw is comparison/QA only and must never be added to BMR (§3).
+ * Kcal Raw is comparison only and must never be added to BMR (§3.2).
  */
 export function activeKcal({ met, model, kg, hours }) {
   const effectiveMet = Number(met) - modelOffset(model);
@@ -262,7 +243,9 @@ export function metFromHrr(hrr) {
  * Full validation chain for one BPM observation (feature §12.8):
  * watch reading → correction → HRR% → implied MET → comparison against the task MET.
  *
- * §5 step 4: if BPM suggests higher, revise the task MET upward and note the revision.
+ * §5 step 3: BPM agrees → keep. BPM disagrees → revise and state the revision.
+ * Revision runs both directions; a downward revision is recorded with the same
+ * prominence as an upward one.
  */
 export function validateWithBpm({ watchBpm, taskMet = null, resting = RESTING_HR, max = MAX_HR }) {
   const correction = bpmCorrection(watchBpm);
@@ -290,8 +273,8 @@ export function validateWithBpm({ watchBpm, taskMet = null, resting = RESTING_HR
         verdict = 'revise-up';
         message = `BPM suggests higher (${implied.metMin}–${implied.metMax}). Revise task MET upward from ${met} and note the revision.`;
       } else {
-        verdict = 'below';
-        message = `BPM implies ${implied.metMin}–${implied.metMax}, below the task MET of ${met}. Heat index confirms upper-range assignments but does not independently raise MET — keep the task MET unless the description is wrong.`;
+        verdict = 'revise-down';
+        message = `BPM suggests lower (${implied.metMin}–${implied.metMax}). Revise task MET downward from ${met} and note the revision — a cross-check that can only raise values isn't a cross-check.`;
       }
     }
   }
@@ -318,7 +301,7 @@ export function validateWithBpm({ watchBpm, taskMet = null, resting = RESTING_HR
  * Net work time = (shift end − shift start) − lunch − documented breaks −
  * explicit non-work transit (supply runs, equipment drop-off, etc.).
  *
- * Breaks default to 11 min per session (§8) when exact timestamps aren't logged.
+ * Breaks default to ~10 min per session (§8.3) when exact timestamps aren't logged.
  */
 export function computeNetWorkMinutes(entry, breakMinutesDefault = DEFAULT_BREAK_MINUTES) {
   const gross = durationMinutes(entry.shiftStart, entry.shiftEnd);
@@ -326,6 +309,17 @@ export function computeNetWorkMinutes(entry, breakMinutesDefault = DEFAULT_BREAK
   let lunch = 0;
   if (entry.lunchStart && entry.lunchEnd) {
     lunch = durationMinutes(entry.lunchStart, entry.lunchEnd);
+    // Only the part of lunch inside the shift comes off work time: an
+    // afternoon shift that starts when lunch ends (12:22–1:16, shift 1:16 PM)
+    // loses nothing to it.
+    const s = parseTime(entry.shiftStart);
+    const ls = parseTime(entry.lunchStart);
+    if (s !== null && ls !== null && gross > 0) {
+      const shiftEnd = s + gross;
+      const lStart = ls < s && s - ls > 720 ? ls + 1440 : ls;
+      const lEnd = lStart + lunch;
+      lunch = Math.max(0, Math.min(shiftEnd, lEnd) - Math.max(s, lStart));
+    }
   } else if (Number.isFinite(Number(entry.lunchMinutes))) {
     lunch = Number(entry.lunchMinutes) || 0;
   }
@@ -404,10 +398,10 @@ export function allocatePhaseMinutes(phases, netWorkMinutes) {
 }
 
 /* ------------------------------------------------------------------ *
- * §9 / §10 / §11 — NEAT, TEF, background
+ * §2 — NEAT, TEF, background
  * ------------------------------------------------------------------ */
 
-/** §9 — post-work NEAT scales with day intensity. */
+/** §2 — post-work NEAT scales with day intensity. */
 export function suggestNeatTier({ netWorkMinutes = 0, feelsLikeF = null, maxMet = 0, restDay = false }) {
   if (restDay) return NEAT_TIERS[0];
   const hours = netWorkMinutes / 60;
@@ -417,7 +411,7 @@ export function suggestNeatTier({ netWorkMinutes = 0, feelsLikeF = null, maxMet 
   return NEAT_TIERS[1];
 }
 
-/** §11 — background daily life scales with commute load, not work intensity. */
+/** Background daily life scales with commute load, not work intensity. */
 export function suggestBackgroundTier({ siteCount = 1, outOfStateSupplyRun = false }) {
   if (outOfStateSupplyRun || Number(siteCount) >= 3) return BACKGROUND_TIERS[2];
   if (Number(siteCount) === 2) return BACKGROUND_TIERS[1];
@@ -425,7 +419,7 @@ export function suggestBackgroundTier({ siteCount = 1, outOfStateSupplyRun = fal
 }
 
 /**
- * §10 — standard TEF is 210 kcal (~10% of ~2,000 kcal). Adjust only when actual
+ * §2 — standard TEF is ~210 kcal (~10% of ~2,000 kcal). Adjust only when actual
  * intake is known to differ significantly (here: more than 15% off baseline).
  */
 export function suggestTef(intakeKcal) {
@@ -478,7 +472,6 @@ function normalizePhase(phase) {
     grossMinutes: phase.grossMinutes ?? '',
     netMinutesOverride: phase.netMinutesOverride ?? '',
     modelOverride: phase.modelOverride || '',
-    vigorous: Boolean(phase.vigorous),
     captureCategory: phase.captureCategory || '',
     watchBpm: phase.watchBpm ?? '',
     samsungActiveMinutes: phase.samsungActiveMinutes ?? '',
@@ -498,6 +491,18 @@ function normalizePhase(phase) {
  * @param {object} settings  { bmr, breakMinutesDefault, restingHr, maxHr, weightKg }
  * @returns {object} components, per-phase breakdown, model comparison, flags
  */
+/** §7 — walking kcal for a non-work day, Intermediate model at MET 3.3. */
+export function walkingKcal({ steps, kg }) {
+  const count = Number(steps);
+  const hours = (Number.isFinite(count) && count > 0 ? count : NON_WORK_DAY.defaultSteps) / NON_WORK_DAY.stepsPerHour;
+  return { hours, kcal: activeKcal({ met: NON_WORK_DAY.walkingMet, model: MODEL.INTERMEDIATE, kg, hours }) };
+}
+
+/** §6 — the document-of-record figure for a date, if DILIGENT IV lists one. */
+export function datasetFigure(date) {
+  return DATASET_IV.find((d) => d.date === date) || null;
+}
+
 export function calculateDay(entry, settings = {}) {
   const bmr = Number(settings.bmr ?? BMR_KCAL);
   const breakMinutesDefault = Number(settings.breakMinutesDefault ?? DEFAULT_BREAK_MINUTES);
@@ -520,14 +525,7 @@ export function calculateDay(entry, settings = {}) {
   const flags = [];
   const phases = allocated.map(({ phase, grossMinutes, netMinutes, exact }) => {
     const hours = minutesToHours(netMinutes);
-    const auto = selectModel({
-      met: phase.met,
-      feelsLikeF,
-      soilCode: phase.soilCode,
-      vigorous: phase.vigorous,
-    });
-    const model = phase.modelOverride || auto.model;
-    const overridden = Boolean(phase.modelOverride) && phase.modelOverride !== auto.model;
+    const model = ACTIVE_MODEL;
 
     const byModel = {
       [MODEL.RAW]: activeKcal({ met: phase.met, model: MODEL.RAW, kg, hours }),
@@ -551,10 +549,8 @@ export function calculateDay(entry, settings = {}) {
       netMinutes,
       hours,
       exactNet: exact,
-      autoModel: auto.model,
-      kriReasons: auto.reasons,
       model,
-      modelOverridden: overridden,
+      restatedFromKri: phase.modelOverride === MODEL.KRI,
       kcal: byModel[model],
       byModel,
       bpm,
@@ -562,7 +558,9 @@ export function calculateDay(entry, settings = {}) {
     };
   });
 
-  const activeTotal = phases.reduce((sum, p) => sum + p.kcal, 0);
+  // §7 — a non-work day's only activity line is walking.
+  const walking = restDay ? walkingKcal({ steps: entry.steps, kg }) : null;
+  const activeTotal = walking ? walking.kcal : phases.reduce((sum, p) => sum + p.kcal, 0);
   const maxMet = phases.reduce((max, p) => Math.max(max, Number(p.met) || 0), 0);
 
   // NEAT (§9)
@@ -571,7 +569,7 @@ export function calculateDay(entry, settings = {}) {
   const neatDefault = (NEAT_TIERS.find((t) => t.id === neatTier) || neatSuggestion).default;
   const neat = Number.isFinite(Number(entry.neatKcal)) && entry.neatKcal !== '' && entry.neatKcal !== null
     ? Number(entry.neatKcal)
-    : neatDefault;
+    : restDay ? NON_WORK_DAY.neatKcal : neatDefault;
 
   // Background (§11)
   const siteCount = Number(entry.siteCount) || (new Set(phases.map((p) => p.site).filter(Boolean)).size || 1);
@@ -581,12 +579,17 @@ export function calculateDay(entry, settings = {}) {
   });
   const bgTier = entry.backgroundTier || bgSuggestion.id;
   const bgDefault = (BACKGROUND_TIERS.find((t) => t.id === bgTier) || bgSuggestion).kcal;
+  // §7 — no separate background bucket on a non-work day; it folds into NEAT.
   const background = Number.isFinite(Number(entry.backgroundKcal)) && entry.backgroundKcal !== '' && entry.backgroundKcal !== null
     ? Number(entry.backgroundKcal)
-    : bgDefault;
+    : restDay ? 0 : bgDefault;
 
   // TEF (§10)
   const tefSuggestion = suggestTef(entry.intakeKcal);
+  if (restDay && !tefSuggestion.adjusted) {
+    tefSuggestion.kcal = NON_WORK_DAY.tefKcal;
+    tefSuggestion.reason = 'Non-work day baseline (~190–210 kcal)';
+  }
   const tef = Number.isFinite(Number(entry.tefKcal)) && entry.tefKcal !== '' && entry.tefKcal !== null
     ? Number(entry.tefKcal)
     : tefSuggestion.kcal;
@@ -606,7 +609,6 @@ export function calculateDay(entry, settings = {}) {
     [MODEL.INTERMEDIATE]: phases.reduce((s, p) => s + p.byModel[MODEL.INTERMEDIATE], 0),
     [MODEL.KRI]: phases.reduce((s, p) => s + p.byModel[MODEL.KRI], 0),
     used: activeTotal,
-    mixed: new Set(phases.map((p) => p.model)).size > 1,
   };
 
   /* ---------------- data-quality flags (§12.12) ---------------- */
@@ -615,8 +617,18 @@ export function calculateDay(entry, settings = {}) {
     flags.push({ level: 'error', text: 'No bodyweight set — active calories cannot be calculated.' });
   }
   if (!restDay && rawPhases.length === 0) {
-    flags.push({ level: 'warn', text: 'No task phases logged, so active work calories are zero for this day.' });
+    const shifted = Boolean(entry.shiftStart && entry.shiftEnd);
+    flags.push(shifted
+      ? { level: 'error', text: 'Shift logged with no task description — the Aug 28 / Sept 4 failure. Active work is zero; without HR to reconstruct it, this day is unusable. Describe resistance and continuity, not just the verb.' }
+      : { level: 'warn', text: 'No task phases logged, so active work calories are zero for this day.' });
   }
+  if (restDay) {
+    flags.push({
+      level: 'info',
+      text: `Non-work day (§7): walking ${Number(entry.steps) > 0 ? `${Number(entry.steps).toLocaleString()} steps` : `assumed ${NON_WORK_DAY.defaultSteps.toLocaleString()} steps (log the day's step count to tighten this)`} ≈ ${walking.hours.toFixed(1)} hr at MET ${NON_WORK_DAY.walkingMet}, no background bucket. The ~${NON_WORK_DAY.expectedTotal.toLocaleString()} kcal estimate is still unvalidated.`,
+    });
+  }
+  for (const f of Array.isArray(entry.importFlags) ? entry.importFlags : []) flags.push(f);
   if (!restDay && timing.netWorkMinutes < 0) {
     flags.push({
       level: 'error',
@@ -626,7 +638,7 @@ export function calculateDay(entry, settings = {}) {
   if (!restDay && timing.breakEstimated && Number(entry.breakCount) > 0) {
     flags.push({
       level: 'info',
-      text: `Break time estimated at the ${breakMinutesDefault}-min default × ${entry.breakCount} break(s). Exact timestamps would tighten this.`,
+      text: `Break time assumed at ~${breakMinutesDefault} min × ${entry.breakCount} break(s) = ${timing.breakMinutes} min${timing.grossMinutes ? ` (${Math.round((timing.breakMinutes / timing.grossMinutes) * 100)}% of the shift)` : ''}. Start/end break timestamps are still the highest-value logging fix.`,
     });
   }
   if (!restDay && phases.length > 0) {
@@ -645,13 +657,13 @@ export function calculateDay(entry, settings = {}) {
   if (!restDay && entry.heatInferred && feelsLikeF === null) {
     flags.push({
       level: 'warn',
-      text: 'Heat trigger applied inferentially — feels-like temperature was not documented. Cross-check against BPM data where available.',
+      text: 'Heat ≥88°F inferred, not documented — upper-range MET confirmations for this day are inferential. Cross-check against BPM data where available.',
     });
   }
   if (!restDay && feelsLikeF === null && !entry.heatInferred && phases.length > 0) {
     flags.push({
       level: 'info',
-      text: 'No feels-like temperature logged, so the 88°F KRI trigger could not be evaluated for this day.',
+      text: 'No feels-like temperature logged, so heat could not confirm upper-range MET assignments for this day.',
     });
   }
   if (!restDay && phases.length > 0 && phases.every((p) => p.watchBpm === '' || p.watchBpm === null)) {
@@ -670,16 +682,16 @@ export function calculateDay(entry, settings = {}) {
         text: `"${p.description || 'Untitled phase'}": Samsung capture rate ${(p.capture.rate * 100).toFixed(0)}% is above the expected ${(p.capture.band.min * 100).toFixed(0)}–${(p.capture.band.max * 100).toFixed(0)}% for ${p.capture.categoryLabel}. Data-quality note only — calendar net work time stands.`,
       });
     }
-    if (p.bpm && p.bpm.verdict === 'revise-up') {
+    if (p.bpm && (p.bpm.verdict === 'revise-up' || p.bpm.verdict === 'revise-down')) {
       flags.push({
         level: 'warn',
         text: `"${p.description || 'Untitled phase'}": ${p.bpm.message}`,
       });
     }
-    if (p.modelOverridden) {
+    if (p.restatedFromKri) {
       flags.push({
         level: 'info',
-        text: `"${p.description || 'Untitled phase'}": model manually set to ${MODEL_LABELS[p.model]} (auto-selection chose ${MODEL_LABELS[p.autoModel]}).`,
+        text: `"${p.description || 'Untitled phase'}" was forced to KRI before its retirement on ${KRI_RETIRED_ON}; restated under Intermediate (${Math.round(p.byModel[MODEL.KRI] - p.kcal)} kcal lower). Don't average against pre-restatement figures.`,
       });
     }
     // Notes from the MET glossary (risky phrasing, unmatched terms, defaults)
@@ -693,9 +705,26 @@ export function calculateDay(entry, settings = {}) {
     }
   }
 
+  // §6 — reconcile against the document of record, never assume they're in sync.
+  const doc = datasetFigure(entry.date);
+  if (doc) {
+    if (doc.tdee === null) {
+      flags.push({ level: 'warn', text: `DILIGENT IV §6 marks this day unusable: ${doc.note || doc.task}` });
+    } else {
+      const delta = tdee - doc.tdee;
+      const off = Math.abs(delta) > 300;
+      flags.push({
+        level: off ? 'warn' : 'info',
+        text: `DILIGENT IV §6 records ~${doc.tdee.toLocaleString()} kcal (MET ${doc.met}, ${doc.hours} active hr) for this day; the app computes ${Math.round(tdee).toLocaleString()} (${delta >= 0 ? '+' : '−'}${Math.abs(Math.round(delta)).toLocaleString()}).${off ? ' Outside the ±300 kcal precision floor — re-verify the stored day.' : ''}${doc.note ? ` ${doc.note}` : ''}`,
+      });
+    }
+  }
+
   return {
     date: entry.date,
     restDay,
+    walking,
+    dataset: doc,
     weightKg: kg,
     feelsLikeF,
     timing: { ...timing, netWorkMinutes },
@@ -748,7 +777,7 @@ export const ENGINE_CONSTANTS = {
   TEF_BASELINE_KCAL,
   DEFAULT_BREAK_MINUTES,
   HEAT_TRIGGER_F,
-  KRI_MET_THRESHOLD,
+  KRI_RETIRED_ON,
   RESTING_HR,
   MAX_HR,
 };

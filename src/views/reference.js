@@ -4,8 +4,10 @@ import {
   BACKGROUND_TIERS,
   BMR_KCAL,
   CAPTURE_CATEGORIES,
+  DATASET_IV,
   KNOWN_LIMITATIONS,
   NEAT_TIERS,
+  NON_WORK_DAY,
   OUT_OF_SCOPE,
   SOIL_CLASSES,
   TASK_METS,
@@ -31,44 +33,46 @@ export function render(root) {
         all other components represent calories above that resting floor.
       </p>
       <ul class="ref-list">
-        <li><strong>BMR — ${BMR_KCAL.toLocaleString()} kcal/day (fixed).</strong> Measured on an Oxiline Scale MD Pro (8-electrode segmental BIA). Not recalculated from Mifflin-St Jeor or any other population formula; stays fixed unless a new DEXA or working BIA device provides an update. <span class="sec-ref">§2</span></li>
-        <li><strong>TEF — ${TEF_BASELINE_KCAL} kcal standard</strong> (~10% of a ~2,000 kcal typical intake), adjusted only when logged intake differs significantly. <span class="sec-ref">§10</span></li>
+        <li><strong>BMR — ${BMR_KCAL.toLocaleString()} kcal/day, fixed constant.</strong> Never recalculated per day. <span class="sec-ref">§2</span></li>
+        <li><strong>TEF — ~205–215 kcal</strong> (${TEF_BASELINE_KCAL} standard, ~10% of a ~2,000 kcal typical intake), adjusted only when logged intake differs significantly. <span class="sec-ref">§2</span></li>
+        <li><strong>Samsung "Total burned calories" is not TDEE.</strong> Never reference it. <span class="sec-ref">§4</span></li>
       </ul>
     </section>
 
     <section class="card">
-      <h3>Active work calorie models <span class="sec-ref">§3</span></h3>
+      <h3>Active work calorie model <span class="sec-ref">§3</span></h3>
       <table class="table">
-        <thead><tr><th>Model</th><th>Formula</th><th>Use when</th></tr></thead>
+        <thead><tr><th>Model</th><th>Formula</th><th>Status</th></tr></thead>
         <tbody>
-          <tr class="raw-row">
-            <td>${MODEL_LABELS[MODEL.RAW]}</td>
-            <td class="mono">${MODEL_FORMULAS[MODEL.RAW]}</td>
-            <td>Comparison only — never a TDEE input (double-counts the ~113 kcal/hr resting floor)</td>
-          </tr>
           <tr>
             <td>${MODEL_LABELS[MODEL.INTERMEDIATE]}</td>
             <td class="mono">${MODEL_FORMULAS[MODEL.INTERMEDIATE]}</td>
-            <td>MET &lt; 6.5 <strong>and</strong> feels-like temp &lt; 88°F</td>
+            <td><strong>The only active model</strong> — all intensities, all work days</td>
           </tr>
-          <tr>
+          <tr class="raw-row">
+            <td>${MODEL_LABELS[MODEL.RAW]}</td>
+            <td class="mono">${MODEL_FORMULAS[MODEL.RAW]}</td>
+            <td>Comparison only — never a TDEE input (double-counts ~113 kcal/hr with BMR added separately)</td>
+          </tr>
+          <tr class="raw-row">
             <td>${MODEL_LABELS[MODEL.KRI]}</td>
             <td class="mono">${MODEL_FORMULAS[MODEL.KRI]}</td>
-            <td>MET ≥ 6.5, <strong>or</strong> feels-like ≥ 88°F, <strong>or</strong> HC/HCP/SRW soil, <strong>or</strong> any sustained vigorous day</td>
+            <td>Retired Sept 3, 2026 — overlapped Intermediate too heavily. Restatement impact ≈ 29 kcal per active hour.</td>
           </tr>
         </tbody>
       </table>
       <p class="muted">
-        Model selection is per-task, not per-day — a single day can have multiple task phases, each independently assigned.
-        The 88°F threshold applies to feels-like / heat index, not raw temperature. Where feels-like isn't documented but
-        conditions strongly imply ≥88°F, apply KRI and mark the day as inferential rather than skipping it.
+        Every day, before or after Sept 3, is computed under Intermediate. Do not average restated figures against
+        pre-restatement ones.
       </p>
+      <p class="formula small">Net active = (shift end − shift start) − lunch − breaks − documented idle/travel</p>
+      <p class="muted">Idle and travel are excluded outright, not assigned a low MET. Multi-task days get a blended MET weighted by minutes per task.</p>
     </section>
 
     <section class="card">
       <h3>Soil / task classification <span class="sec-ref">§5</span></h3>
       <table class="table">
-        <thead><tr><th>Code</th><th>Classification</th><th>Description</th><th class="right">MET</th><th></th></tr></thead>
+        <thead><tr><th>Code</th><th>Classification</th><th>Description</th><th class="right">MET</th></tr></thead>
         <tbody>
           ${SOIL_CLASSES.map(
             (s) => `<tr>
@@ -76,7 +80,6 @@ export function render(root) {
               <td>${esc(s.name)}</td>
               <td class="muted">${esc(s.description)}</td>
               <td class="right">${metRange(s.metMin, s.metMax)}</td>
-              <td>${s.kriTrigger ? '<span class="pill kri">KRI</span>' : ''}</td>
             </tr>`,
           ).join('')}
         </tbody>
@@ -104,9 +107,9 @@ export function render(root) {
       <ol class="ref-list numbered">
         <li>Primary input: task description + soil classification from the calendar log.</li>
         <li>Validation: corrected BPM → HRR → cross-check against the MET-HRR table.</li>
-        <li>If BPM validates the task MET, use the task MET.</li>
-        <li>If BPM suggests higher, revise the task MET upward and note the revision.</li>
-        <li>Heat index confirms upper-range MET assignments but does not independently raise the MET value.</li>
+        <li>BPM agrees → keep. BPM disagrees → <strong>revise and state the revision</strong>.</li>
+        <li>Revision runs both directions. Sept 5 was the first downward revision (7.5 → 6.0); record downward revisions with the same prominence as upward ones.</li>
+        <li>Heat index 88°F+ confirms upper-range MET assignments but does not independently raise the MET value.</li>
         <li>Multi-task days: split into phases by task description and calendar timestamps, assign MET per phase, and weight active kcal by net time per phase.</li>
       </ol>
     </section>
@@ -160,7 +163,7 @@ export function render(root) {
       <ul class="ref-list">
         <li>Calendar-documented pure work windows are the preferred input. When timestamps are explicit, no further capture-rate adjustment is applied.</li>
         <li>Samsung "active minutes" is a cross-check floor, not a primary input. A capture rate far outside the expected band is a data-quality note — it never overrides calendar-based net work time.</li>
-        <li>Breaks default to 11 min per session when exact timestamps aren't logged, multiplied by the day's break count.</li>
+        <li>Breaks default to ~10 min per session when only a count is logged — a working assumption, stated on every day it's used. Start/end timestamps remain the highest-value logging fix.</li>
         <li>Multi-site days allocate breaks and lunch proportionally across sites by gross on-site time, unless exact timestamps pin them to one site.</li>
         <li>Activity embedded in a lunch block (e.g. a landfill run) is split out: ~30–40 min of true eating time, with the embedded task logged as its own phase and MET.</li>
       </ul>
@@ -175,7 +178,7 @@ export function render(root) {
     </section>
 
     <section class="card">
-      <h3>Estimated lines <span class="sec-ref">§9 · §11</span></h3>
+      <h3>Estimated lines <span class="sec-ref">§2</span></h3>
       <div class="grid grid-2">
         <div>
           <h4>Post-work NEAT</h4>
@@ -198,8 +201,48 @@ export function render(root) {
       </p>
     </section>
 
+    <section class="card">
+      <h3>University / non-work days <span class="sec-ref">§7</span></h3>
+      <p class="muted">No task or soil to classify. Built additively, with no separate background bucket — with no labor block, it folds into general NEAT. Tick <em>Non-work day</em> on the Daily entry tab and log the step count.</p>
+      <table class="table compact">
+        <tbody>
+          <tr><td>BMR</td><td class="right">${BMR_KCAL.toLocaleString()}</td></tr>
+          <tr><td>Walking, 8–9k steps @ MET ${NON_WORK_DAY.walkingMet}, ~1.4 hr</td><td class="right">~185–200</td></tr>
+          <tr><td>General day NEAT</td><td class="right">~90–100</td></tr>
+          <tr><td>TEF</td><td class="right">~190–210</td></tr>
+          <tr><td><strong>Total</strong></td><td class="right"><strong>~${NON_WORK_DAY.expectedTotal.toLocaleString()}</strong></td></tr>
+        </tbody>
+      </table>
+      <p class="muted small">Still unvalidated. Priority: a full uni-day HR export paired with that day's step count.</p>
+    </section>
+
+    <section class="card">
+      <h3>Standing data-quality problems <span class="sec-ref">§8</span></h3>
+      <ol class="ref-list numbered">
+        <li><strong>Calendar start_time is unreliable</strong> (broken Aug 19, Aug 24). end_time has held up on every broken entry. When they conflict with the task or a logged lunch, trust HR.</li>
+        <li><strong>A "half." title carries no duration information.</strong> Both broken-timestamp days were titled "half." and were full shifts.</li>
+        <li><strong>Break logging degraded</strong> — counts replaced timestamps. ~10 min/break assumed and stated every time.</li>
+        <li><strong>Missing task descriptions</strong> (Aug 28, Sept 4). Aug 28 was a total loss; Sept 4 survived only because HR existed.</li>
+        <li><strong>Vague descriptions understate load.</strong> Aug 31 read as light material moving and was a 7.5. Describe resistance and continuity, not just the verb.</li>
+        <li><strong>Hybrid work/uni days exist.</strong> Segment them; don't average across the lecture block.</li>
+        <li><strong>HR coverage runs through Sept 10.</strong> Keep a weekly export cadence.</li>
+      </ol>
+      <p class="muted small">The importer flags the first four automatically when the calendar text shows them.</p>
+    </section>
+
+    <section class="card">
+      <h3>Dataset of record — Intermediate <span class="sec-ref">§6</span></h3>
+      <p class="muted">Hand-computed in DILIGENT IV. When a stored day falls on one of these dates, its data-quality panel shows the difference, so the two can be reconciled rather than assumed in sync.</p>
+      <table class="table compact">
+        <thead><tr><th>Date</th><th>Task</th><th class="right">MET</th><th class="right">Active hr</th><th class="right">TDEE</th></tr></thead>
+        <tbody>
+          ${DATASET_IV.map((d) => `<tr><td class="mono">${d.date.slice(5)}</td><td>${esc(d.task)}${d.note ? `<span class="sub muted small"> — ${esc(d.note)}</span>` : ''}</td><td class="right">${d.met ?? '—'}</td><td class="right">${d.hours ?? '—'}</td><td class="right">${d.tdee === null ? 'unusable' : `~${d.tdee.toLocaleString()}`}</td></tr>`).join('')}
+        </tbody>
+      </table>
+    </section>
+
     <section class="card limitations">
-      <h3>Known limitations <span class="sec-ref">§13</span></h3>
+      <h3>Known limitations</h3>
       <ul class="ref-list">${KNOWN_LIMITATIONS.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>
       <h4>Explicitly out of scope</h4>
       <ul class="ref-list">${OUT_OF_SCOPE.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>

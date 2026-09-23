@@ -284,6 +284,11 @@ const DURATION = /~?\s*(\d+)\s*h(?:ours?|rs?)?\s*(\d+)\s*m(?:in(?:utes)?)?\b|~?\
  * "(8:10 - 10:33)" or "(Post lunch - end shift)", "Arrived 1:45" / "left
  * 4:23" markers, and the shift edges for the first and last blocks.
  */
+/** An enumerated or bulleted item with nothing after it ("1.)", "•"). */
+const EMPTY_ITEM = /^[ \t]*(?:\d+[.)]{1,2}|[•*+])[ \t]*$/m;
+/** A "half." calendar title on its own line (or as "Title: half."). */
+const HALF_TITLE = /^[ \t]*(?:title[ \t]*:[ \t]*)?["“]?half\.?["”]?[ \t]*$/im;
+
 function parseTasks(text, ctx) {
   const bullets = [];
   for (const line of text.split(/\r?\n/)) {
@@ -457,15 +462,21 @@ export function parseCalendarLog(text, opts = {}) {
   }
   if (excludedMinutes) patch.transitMinutes = excludedMinutes;
 
+  const importFlags = [];
   const revision = bpmRevisionFromNotes(body);
   if (revision && phases.length) {
     for (const p of phases) {
-      const prior = p.met === '' ? 'none' : p.met;
+      const prior = p.met === '' ? null : Number(p.met);
+      // §5 — revision runs both directions; say which way it went.
+      const direction = prior === null || prior === revision.met ? '' : prior > revision.met ? 'downward ' : 'upward ';
       p.met = revision.met;
       p.metSource = 'bpm-note';
       p.metConfidence = 'high';
-      p.metBasis = `BPM-confirmed ${revision.blended ? 'blended day MET' : 'revision'} from the day's note (task-based estimate was ${prior}): "${revision.line}"`;
+      p.metBasis = `BPM-confirmed ${revision.blended ? 'blended day MET' : `${direction}revision`} from the day's note (task-based estimate was ${prior ?? 'none'}): "${revision.line}"`;
       p.metNotes = (p.metNotes || []).filter((n) => n.level !== 'warn');
+    }
+    if (revision.direction === 'down') {
+      importFlags.push({ level: 'warn', text: `Downward BPM revision to MET ${revision.met} — recorded with the same prominence as an upward one (§5): "${revision.line}"` });
     }
     if (phases.length > 1) {
       noteLines.push(`Day-level MET ${revision.met} from the note applied to all ${phases.length} phases, so the day blends to it exactly${revision.blended ? ' — per-block split in the note needs phase times to map' : ''}.`);
@@ -476,6 +487,24 @@ export function parseCalendarLog(text, opts = {}) {
     patch.phases = phases;
     matched.push('tasks');
   }
+
+  // §8 — standing data-quality problems the calendar text itself reveals.
+  if (EMPTY_ITEM.test(body)) {
+    importFlags.push({ level: 'error', text: 'A task item is empty (e.g. "1.)" with nothing after it) — the Aug 28 / Sept 4 failure. Add the description; HR can only salvage it, not recover it.' });
+  }
+  if (HALF_TITLE.test(body)) {
+    importFlags.push({ level: 'warn', text: '"half." title carries no duration information — both Aug 19 and Aug 24 "half." days were full shifts. Go by the logged shift times, and HR where they conflict.' });
+  }
+  // An afternoon shift that starts as lunch ends is normal; a start that
+  // lands in the middle of the logged lunch, or in the small hours, is not.
+  const startMin = toMin(patch.shiftStart);
+  const lunchStart = toMin(patch.lunchStart);
+  const lunchEnd = toMin(patch.lunchEnd);
+  const midLunch = lunchStart !== null && lunchEnd !== null && startMin > lunchStart && startMin < lunchEnd;
+  if (startMin !== null && (startMin < 4 * 60 || midLunch)) {
+    importFlags.push({ level: 'warn', text: `Calendar start_time ${patch.shiftStart} looks broken (${midLunch ? 'it falls inside the logged lunch' : 'before 4 AM'}) — the Aug 19 / Aug 24 pattern. end_time has held up on every broken entry; recover the true start from HR.` });
+  }
+  if (importFlags.length) patch.importFlags = importFlags;
 
   const metReport = {
     phases: phases.length,

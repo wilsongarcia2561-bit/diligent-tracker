@@ -78,7 +78,7 @@ export function rollingSeries(days, span = 7) {
 
 /** The phase that burned the most, as a short label for ledgers and lists. */
 export function mainTask(day) {
-  if (day.restDay) return 'Rest day';
+  if (day.restDay) return 'Non-work day';
   const phases = (day.phases || []).filter((p) => p.description);
   if (!phases.length) return '';
   return phases.reduce((best, p) => (p.kcal > best.kcal ? p : best)).description;

@@ -93,8 +93,6 @@ export function newPhase(overrides = {}) {
     start: '',
     end: '',
     netMinutesOverride: '',
-    modelOverride: '',
-    vigorous: false,
     captureCategory: '',
     watchBpm: '',
     samsungActiveMinutes: '',
@@ -128,7 +126,9 @@ export function newEntry(date) {
     backgroundKcal: '',
     tefKcal: '',
     intakeKcal: '',
+    steps: '',
     notes: '',
+    importFlags: [],
     phases: [newPhase()],
     updatedAt: null,
   };
@@ -200,7 +200,7 @@ export function exportJson() {
 export function importJson(text) {
   const parsed = JSON.parse(text);
   if (!parsed || typeof parsed !== 'object' || !('entries' in parsed)) {
-    throw new Error('That file does not look like a Diligent III export.');
+    throw new Error('That file does not look like a Diligent export.');
   }
   state = {
     ...emptyState(),

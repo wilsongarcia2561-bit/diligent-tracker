@@ -1,29 +1,34 @@
 /**
- * Diligent III — static reference data from the spec.
- * Section numbers below refer to the "Diligent III — TDEE Tracking Framework Spec".
+ * Diligent IV — static reference data from the spec.
+ * Section numbers below refer to "DILIGENT IV — TDEE Methodology & Dataset"
+ * (revised Sept 23, 2026) unless marked otherwise.
  */
 
-/** §2 — measured BMR from Oxiline Scale MD Pro. Fixed; do not recalculate from Mifflin-St Jeor. */
+/** §1–2 — measured BMR. Fixed constant; never recalculated per day. */
 export const BMR_KCAL = 1436;
 
-/** §10 — thermic effect of food, ~10% of a ~2,000 kcal baseline intake. */
+/** §2 — thermic effect of food, ~205–215 kcal (~10% of a ~2,000 kcal baseline intake). */
 export const TEF_BASELINE_KCAL = 210;
 export const TEF_BASELINE_INTAKE_KCAL = 2000;
 
-/** §8 — user-confirmed average break length when exact timestamps aren't logged. */
-export const DEFAULT_BREAK_MINUTES = 11;
+/** §8.3 — working assumption when breaks are logged as counts, not timestamps. State it every time. */
+export const DEFAULT_BREAK_MINUTES = 10;
 
-/** §3 — heat trigger threshold, applied to feels-like / heat index, not raw temperature. */
+/**
+ * §5 — heat index at or above this confirms upper-range MET assignments. It
+ * does not raise MET on its own, and (since KRI's retirement) no longer
+ * changes the model.
+ */
 export const HEAT_TRIGGER_F = 88;
 
-/** §3 — MET at or above which KRI is used regardless of heat. */
-export const KRI_MET_THRESHOLD = 6.5;
+/** §3.3 — KRI was retired on this date; every day, before or after, is restated under Intermediate. */
+export const KRI_RETIRED_ON = '2026-09-03';
 
-/** §6 — heart rate baselines. */
+/** §1 / §4 — heart-rate baselines used for HRR = (corrected BPM − 49) / 152. */
 export const RESTING_HR = 49;
 export const MAX_HR = 201;
 
-/** §4 — bodyweight constant, updated only from fasted morning post-bathroom readings. */
+/** §1 — bodyweight constant, updated only from fasted morning post-bathroom readings. */
 export const DEFAULT_WEIGHT_KG = 57.6;
 
 export const SEED_WEIGHT_LOG = [
@@ -32,28 +37,28 @@ export const SEED_WEIGHT_LOG = [
   { date: '2026-07-23', kg: 57.6, note: 'Confirmed' },
 ];
 
-/** §9 — post-work NEAT tiers. */
+/** §2 — post-work NEAT tiers. */
 export const NEAT_TIERS = [
   { id: 'light', label: 'Short / light day', min: 70, max: 80, default: 75 },
-  { id: 'standard', label: 'Full standard day', min: 85, max: 100, default: 92 },
-  { id: 'heavy', label: 'Heavy / high-heat day', min: 100, max: 110, default: 105 },
+  { id: 'standard', label: 'Full day', min: 85, max: 100, default: 92 },
+  { id: 'heavy', label: 'Heavy day', min: 110, max: 110, default: 110 },
 ];
 
-/** §11 — background daily life tiers (lowest-confidence line in the framework). */
+/** §2 — background daily life, ~200–300 kcal (lowest-confidence line in the framework). */
 export const BACKGROUND_TIERS = [
   { id: 'single', label: 'Single-site day', kcal: 225 },
   { id: 'multi', label: 'Multi-site day (2+ locations)', kcal: 275 },
   { id: 'extreme', label: 'Extreme multi-site (3+ sites, or out-of-state supply run)', kcal: 300 },
 ];
 
-/** §6 — Samsung Galaxy Watch under-reads force-based labor; corrections are additive. */
+/** §4 — Samsung Galaxy Watch under-reads force-based labor; corrections are additive. */
 export const BPM_CORRECTIONS = [
   { id: 'moderate', label: 'Moderate work', watchMin: 80, watchMax: 120, add: 30, addMax: 30 },
   { id: 'heavy', label: 'Heavy work — HC/HCP/SRW', watchMin: 120, watchMax: 155, add: 35, addMax: 35 },
   { id: 'near-max', label: 'Near-max effort', watchMin: 155, watchMax: 172, add: 35, addMax: 50 },
 ];
 
-/** §6 — HRR% → approximate MET reference. */
+/** §4 — HRR% → approximate MET reference. */
 export const HRR_MET_TABLE = [
   { hrrMin: 0.35, hrrMax: 0.45, metMin: 4.5, metMax: 5.5 },
   { hrrMin: 0.45, hrrMax: 0.55, metMin: 5.5, metMax: 6.5 },
@@ -72,9 +77,7 @@ export const CAPTURE_CATEGORIES = {
   detail: { label: 'Fixture / cable / light detail work', min: 0.0, max: 0.5 },
 };
 
-/**
- * §5 — soil / task classification codes. HC, HCP and SRW are KRI triggers on their own.
- */
+/** §5 — soil / task classification codes. */
 export const SOIL_CLASSES = [
   {
     code: 'SC',
@@ -82,7 +85,6 @@ export const SOIL_CLASSES = [
     description: 'Loose topsoil, garden beds, compost',
     metMin: 4.5,
     metMax: 5.0,
-    kriTrigger: false,
   },
   {
     code: 'MC',
@@ -90,7 +92,6 @@ export const SOIL_CLASSES = [
     description: 'Standard mixed soil, moderate resistance',
     metMin: 5.5,
     metMax: 6.5,
-    kriTrigger: false,
   },
   {
     code: 'HC',
@@ -98,7 +99,6 @@ export const SOIL_CLASSES = [
     description: 'North Alabama red clay, standard digging',
     metMin: 7.0,
     metMax: 7.5,
-    kriTrigger: true,
   },
   {
     code: 'HCP',
@@ -106,7 +106,6 @@ export const SOIL_CLASSES = [
     description: 'Heavily compacted, rocky, requires pickaxe',
     metMin: 8.0,
     metMax: 8.5,
-    kriTrigger: true,
   },
   {
     code: 'SRW',
@@ -114,11 +113,8 @@ export const SOIL_CLASSES = [
     description: '75–78 lb block manual carries to height',
     metMin: 9.0,
     metMax: 9.0,
-    kriTrigger: true,
   },
 ];
-
-export const KRI_SOIL_CODES = SOIL_CLASSES.filter((s) => s.kriTrigger).map((s) => s.code);
 
 /**
  * §5 — "Other Tasks" MET table, plus keywords used for auto-suggestion (feature §12.2).
@@ -274,12 +270,14 @@ export const SOIL_KEYWORDS = {
   SRW: ['srw', 'retaining wall block', 'block carry', 'segmental'],
 };
 
-/** §13 — carried into the UI as standing disclaimers. */
+/** Carried into the UI as standing disclaimers. */
 export const KNOWN_LIMITATIONS = [
   'MET values are population averages with real individual variance. This framework should never claim single-day precision better than roughly ±300–500 kcal.',
   'BPM correction factors (+30 / +35) are derived from a small number of manual pulse checks, not a validated device. Treat HRR-derived MET as directional confirmation, not ground truth.',
+  'Samsung "Total burned calories" is not TDEE. Never reference it.',
   'Background and NEAT lines are lower-confidence estimates and are visually distinguished from the active-kcal calculation throughout this app.',
-  'Body composition (BF%, LBM) is not reliably tracked — Scale MD Pro trunk/arm electrodes are non-functional, and the foot-electrode scale is only reliable for legs and total weight. A DEXA scan is recommended as ground truth when available.',
+  'The ~1,950 kcal non-work / university day is still unvalidated — it needs a full uni-day HR export paired with that day\'s step count.',
+  'Body composition from the Oxiline BIA scale is low-confidence (hydration-sensitive) even with function restored. A DEXA scan is the recommended ground truth.',
 ];
 
 export const OUT_OF_SCOPE = [
@@ -289,3 +287,43 @@ export const OUT_OF_SCOPE = [
 ];
 
 export const DAY_UNCERTAINTY_KCAL = { min: 300, max: 500 };
+
+/**
+ * §7 — university / non-work days. No task or soil to classify and no
+ * separate background bucket: BMR + walking + general-day NEAT + TEF.
+ * 8–9k steps is ~1.4 hr of walking, i.e. ~6,070 steps per hour.
+ */
+export const NON_WORK_DAY = {
+  walkingMet: 3.3,
+  defaultSteps: 8500,
+  stepsPerHour: 8500 / 1.4,
+  neatKcal: 95,
+  tefKcal: 200,
+  expectedTotal: 1950,
+};
+
+/**
+ * §6 — the hand-computed Intermediate dataset (post-KRI-retirement figures).
+ * Used to reconcile days the app computes against the document of record.
+ */
+export const DATASET_IV = [
+  { date: '2026-08-12', task: 'HC trench/drain, fabric, river rock', met: 7.5, hours: 4.8, tdee: 3655 },
+  { date: '2026-08-13', task: 'Drain trench, sod compact, brief concrete mix', met: 7.0, hours: 5.2, tdee: 3793 },
+  { date: '2026-08-14', task: 'Mulch, 11 yd handthrown + leaf blow', met: 5.5, hours: 3.77, tdee: 2958 },
+  { date: '2026-08-17', task: 'HCP compacted clay, drain pipe, 5 bags concrete, 111°F', met: 9.0, hours: 6.02, tdee: 4785, note: 'Revised up from the HCP baseline on sustained corrected 190s–200s.' },
+  { date: '2026-08-19', task: 'Dirt haul, 9 ft drainpipe dig, gravel haul, estate leaf blow', met: 6.4, hours: 6.3, tdee: 4086, note: 'Titled "half." with a broken start_time; HR recovered a ~7:15 AM start. Not a half day.' },
+  { date: '2026-08-21', task: 'Gravel removal + fabric + regravel; slab edge removal', met: 6.1, hours: 2.8, tdee: 2791 },
+  { date: '2026-08-24', task: 'Material reorganization — pavers, stone edge, gravel, SRW block', met: 5.5, hours: 9.4, tdee: 4439, note: 'Titled "half." with a 1:12 AM start_time; HR recovered a ~7:30 AM start. Not a half day.' },
+  { date: '2026-08-25', task: 'Flexstone patio — sand + cement via wheelbarrow', met: 7.0, hours: 2.8, tdee: 2938 },
+  { date: '2026-08-27', task: 'Sod; flowerbed peel + gravel + planting; polymer sand + pack-up', met: 6.64, hours: 3.98, tdee: 3279, note: 'Flowerbed task revised 5.0 → 8.0 on corrected 195–215.' },
+  { date: '2026-08-28', task: '"half." — no description logged', met: null, hours: null, tdee: null, note: 'Unusable: no task description.' },
+  { date: '2026-08-31', task: 'Move cut branches and wood to front yard, 102°F', met: 7.5, hours: 3.7, tdee: 3381, note: 'Revised from 5.5 / 2.8 hr on HR: +619 kcal against the task-only estimate.' },
+  { date: '2026-09-01', task: 'Landscape lumber install, carry old pieces up steep hill, pack-up', met: 7.0, hours: 3.8, tdee: 3309 },
+  { date: '2026-09-02', task: 'Brick patio removal + haul · uni lecture · backyard debris haul', met: 6.5, hours: 4.07, tdee: 3285, note: 'Hybrid day: lecture block segmented out.' },
+  { date: '2026-09-03', task: 'Trench dig, debris haul, gravel wheelbarrow, sledgehammer pad · 105°F', met: 7.0, hours: 2.1, tdee: 2712 },
+  { date: '2026-09-04', task: 'No description — reconstructed from HR', met: 6.0, hours: 7.07, tdee: 4032, note: 'Salvaged, not recovered.' },
+  { date: '2026-09-05', task: 'Paver stone placement, semi-rush · 106°F', met: 6.0, hours: 6.1, tdee: 3753, note: 'First downward revision (7.5 → 6.0).' },
+  { date: '2026-09-08', task: 'Patio continuation, backyard → driveway sidewalk · 105°F', met: 7.0, hours: 3.17, tdee: 3082 },
+  { date: '2026-09-09', task: '3 pallets Zoysia sod — wheelbarrow haul + lay, 6 sprinkler heads', met: 7.0, hours: 3.5, tdee: 3196, note: 'Revised up 6.0 → 7.0.' },
+  { date: '2026-09-10', task: '6–7 yd mulch wheelbarrow + rake flat', met: 5.5, hours: 1.17, tdee: 2274, note: '3 breaks against a 100-min shift — the break default is load-bearing.' },
+];

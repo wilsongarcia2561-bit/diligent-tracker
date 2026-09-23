@@ -84,7 +84,7 @@ describe('mainTask', () => {
   });
 
   it('labels rest days, and leaves task-less work days blank rather than inventing one', () => {
-    assert.equal(mainTask(day('2026-09-12', 1946, { restDay: true })), 'Rest day');
+    assert.equal(mainTask(day('2026-09-12', 1946, { restDay: true })), 'Non-work day');
     assert.equal(mainTask(day('2026-08-28', 1946)), '');
   });
 });

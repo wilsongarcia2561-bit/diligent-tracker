@@ -11,6 +11,7 @@ import {
   CAPTURE_CATEGORIES,
   DAY_UNCERTAINTY_KCAL,
   NEAT_TIERS,
+  NON_WORK_DAY,
   SOIL_CLASSES,
   TASK_METS,
 } from '../data.js';
@@ -168,7 +169,7 @@ function soilOptions(selected) {
     '<option value="">— none —</option>',
     ...SOIL_CLASSES.map(
       (s) =>
-        `<option value="${s.code}" ${s.code === selected ? 'selected' : ''}>${s.code} — ${esc(s.name)} (MET ${s.metMin}–${s.metMax})${s.kriTrigger ? ' · KRI' : ''}</option>`,
+        `<option value="${s.code}" ${s.code === selected ? 'selected' : ''}>${s.code} — ${esc(s.name)} (MET ${s.metMin}–${s.metMax})</option>`,
     ),
   ].join('');
 }
@@ -190,8 +191,6 @@ function allocText(result) {
 
 function phaseCard(phase, index, calc) {
   const result = calc.phases.find((p) => p.id === phase.id);
-  const autoLabel = result ? MODEL_LABELS[result.autoModel] : '—';
-  const reasons = result && result.kriReasons.length ? result.kriReasons.join(' · ') : 'No KRI trigger — Intermediate applies';
 
   return `<div class="phase" data-phase-card="${phase.id}">
     <div class="phase-head">
@@ -214,24 +213,11 @@ function phaseCard(phase, index, calc) {
       ${field('End', phaseInput(phase.id, 'end', phase.end, 'type="time"'))}
     </div>
 
-    <div class="grid grid-3">
-      ${field(
-        'Model',
-        `<select id="p-${phase.id}-modelOverride" data-phase="${phase.id}" data-field="modelOverride">
-          <option value="" data-automodel="${phase.id}" ${!phase.modelOverride ? 'selected' : ''}>Auto — ${esc(autoLabel)}</option>
-          <option value="${MODEL.INTERMEDIATE}" ${phase.modelOverride === MODEL.INTERMEDIATE ? 'selected' : ''}>Force Intermediate</option>
-          <option value="${MODEL.KRI}" ${phase.modelOverride === MODEL.KRI ? 'selected' : ''}>Force KRI</option>
-        </select>`,
-        `<span data-reasons="${phase.id}">${esc(reasons)}</span>`,
-      )}
+    <div class="grid grid-2">
       ${field(
         'Exact net minutes',
         phaseInput(phase.id, 'netMinutesOverride', phase.netMinutesOverride, 'type="number" min="0" step="1" placeholder="auto"'),
         `<span data-alloc="${phase.id}">${allocText(result)}</span>`,
-      )}
-      ${field(
-        'Sustained vigorous',
-        `<label class="check"><input type="checkbox" id="p-${phase.id}-vigorous" data-phase="${phase.id}" data-field="vigorous" ${phase.vigorous ? 'checked' : ''}> Forces KRI</label>`,
       )}
     </div>
 
@@ -279,7 +265,7 @@ function formTemplate(entry, calc) {
         <span class="field-label">Date</span>
         <input type="date" id="entry-date" value="${esc(entry.date)}">
       </label>
-      <label class="check"><input type="checkbox" id="f-restDay" data-field="restDay" ${entry.restDay ? 'checked' : ''}> Rest day</label>
+      <label class="check"><input type="checkbox" id="f-restDay" data-field="restDay" ${entry.restDay ? 'checked' : ''}> Non-work day</label>
       <button type="button" class="btn ghost" data-action="import-file">Import from file</button>
       <input type="file" id="import-file-input" accept=".md,.markdown,.txt,.pdf" hidden>
       <button type="button" class="btn danger" data-action="delete-entry">Delete day</button>
@@ -321,7 +307,13 @@ Shift: 7:56 AM - 11:51 AM
 
   ${
     entry.restDay
-      ? `<div class="callout info">Rest day — no active work calories. NEAT, TEF and background daily life still apply and can be tuned below.</div>`
+      ? `<section class="card">
+    <h2>Non-work / university day <span class="sec-ref">§7</span></h2>
+    <p class="muted">No task or soil to classify. Built additively: BMR + walking (MET ${NON_WORK_DAY.walkingMet}) + general-day NEAT + TEF, with no separate background bucket. Still unvalidated against HR.</p>
+    <div class="grid grid-2">
+      ${field('Step count', input('steps', entry.steps, `type="number" min="0" step="100" placeholder="${NON_WORK_DAY.defaultSteps}"`), `Blank assumes ${NON_WORK_DAY.defaultSteps.toLocaleString()} (~1.4 hr walking)`)}
+    </div>
+  </section>`
       : `
   <section class="card">
     <h2>Shift &amp; net work time <span class="sec-ref">§8</span></h2>
@@ -350,7 +342,7 @@ Shift: 7:56 AM - 11:51 AM
     <h2>Conditions &amp; sites <span class="sec-ref">§3 · §11</span></h2>
     <div class="grid grid-4">
       ${field('Temp °F', input('tempF', entry.tempF, 'type="number" step="1" placeholder="raw"'))}
-      ${field('Feels-like °F', input('feelsLikeF', entry.feelsLikeF, 'type="number" step="1" placeholder="heat index"'), '≥ 88°F triggers KRI')}
+      ${field('Feels-like °F', input('feelsLikeF', entry.feelsLikeF, 'type="number" step="1" placeholder="heat index"'), '≥ 88°F confirms upper-range MET')}
       ${field('Site count', input('siteCount', entry.siteCount, 'type="number" min="1" step="1" placeholder="auto"'))}
       ${field('Bodyweight kg (fasted AM)', input('weightKg', entry.weightKg, 'type="number" step="0.1" min="0" placeholder="' + num(weightInEffect, 1) + '"'), `Using ${num(calc.weightKg, 1)} kg`)}
     </div>
@@ -365,7 +357,7 @@ Shift: 7:56 AM - 11:51 AM
       <h2>Task phases <span class="sec-ref">§5 · §3</span></h2>
       <button type="button" class="btn" data-action="add-phase">+ Add phase</button>
     </div>
-    <p class="muted">Model selection is per-task, not per-day. Each phase gets its own MET and its own Intermediate/KRI decision.</p>
+    <p class="muted">Every phase uses the Intermediate model, (MET − 1.0) × kg × hrs (§3.1). Multi-task days blend MET by minutes, never by task count.</p>
     <div class="phases">
       ${entry.phases.map((p, i) => phaseCard(p, i, calc)).join('')}
     </div>
@@ -374,7 +366,7 @@ Shift: 7:56 AM - 11:51 AM
   }
 
   <section class="card">
-    <h2>Estimated components <span class="sec-ref">§9 · §10 · §11</span></h2>
+    <h2>Estimated components <span class="sec-ref">§2</span></h2>
     <p class="muted">These three lines are lower-confidence estimates and are tagged EST and hatched in the breakdown above. Leave the kcal boxes blank to use the tier default.</p>
     <div class="grid grid-2">
       ${field(
@@ -429,6 +421,8 @@ function resultsTemplate(calc) {
     ? `<div class="mini"><span class="mini-label">Balance</span><span class="mini-val faint">—</span><span class="mini-sub">log intake to see it</span></div>`
     : `<div class="mini ${balance < 0 ? 'tone-down' : 'tone-up'}"><span class="mini-label">${balance < 0 ? 'Deficit' : 'Surplus'}</span><span class="mini-val">${kcal(Math.abs(balance))}</span></div>`;
 
+  const NON_WORK_LABELS = { active: 'Walking', neat: 'General NEAT' };
+  const label = (c) => (calc.restDay && NON_WORK_LABELS[c.key]) || c.label;
   const maxNet = Math.max(1, ...calc.phases.map((p) => p.netMinutes));
   // Glossary §8: blend by minutes, never by task count.
   const worked = calc.phases.filter((p) => p.met > 0 && p.netMinutes > 0);
@@ -439,7 +433,6 @@ function resultsTemplate(calc) {
       <div class="phase-row-head">
         <span class="idx">${String(i + 1).padStart(2, '0')}</span>
         <span class="phase-name">${esc(p.description || 'Untitled phase')}</span>
-        <span class="pill model-${p.model}">${MODEL_LABELS[p.model]}</span>
         <span class="phase-burn">${kcal(p.kcal)}</span>
       </div>
       <div class="phase-row-meta">
@@ -469,16 +462,16 @@ function resultsTemplate(calc) {
       </div>
 
       <div class="stackbar tall" role="img" aria-label="Today's TDEE split by component">
-        ${COMPONENTS.map((c) => `<span class="${c.estimate ? 'est' : ''}" style="flex:${Math.max(0.001, calc.components[c.key] || 0)};--sw:${c.color}" title="${c.label}: ${kcal(calc.components[c.key])} kcal"></span>`).join('')}
+        ${COMPONENTS.map((c) => `<span class="${c.estimate ? 'est' : ''}" style="flex:${Math.max(0.001, calc.components[c.key] || 0)};--sw:${c.color}" title="${label(c)}: ${kcal(calc.components[c.key])} kcal"></span>`).join('')}
       </div>
       <ul class="legend-grid">
-        ${COMPONENTS.map((c) => `<li><span class="swatch" style="--sw:${c.color}"></span><span>${c.label}${c.estimate ? ' <span class="est-tag">EST</span>' : ''}</span><strong>${kcal(calc.components[c.key])}</strong></li>`).join('')}
+        ${COMPONENTS.map((c) => `<li><span class="swatch" style="--sw:${c.color}"></span><span>${label(c)}${c.estimate ? ' <span class="est-tag">EST</span>' : ''}</span><strong>${kcal(calc.components[c.key])}</strong></li>`).join('')}
       </ul>
     </div>
 
     <div class="result-side">
       <div class="strip">
-        <div><span class="mini-label">Shift</span><span class="strip-val">${calc.restDay ? 'Rest day' : draft.shiftStart && draft.shiftEnd ? `${clock(draft.shiftStart)}–${clock(draft.shiftEnd)}` : '—'}</span></div>
+        <div><span class="mini-label">Shift</span><span class="strip-val">${calc.restDay ? 'Non-work' : draft.shiftStart && draft.shiftEnd ? `${clock(draft.shiftStart)}–${clock(draft.shiftEnd)}` : '—'}</span></div>
         <div><span class="mini-label">Net work</span><span class="strip-val">${calc.restDay ? '—' : hm(calc.timing.netWorkMinutes)}</span></div>
         <div><span class="mini-label">Feels-like</span><span class="strip-val">${calc.feelsLikeF === null ? '—' : `${calc.feelsLikeF}°F`}</span></div>
         <div><span class="mini-label">Sites</span><span class="strip-val">${calc.siteCount}</span></div>
@@ -489,7 +482,7 @@ function resultsTemplate(calc) {
         ${calc.restDay ? '' : '<button type="button" class="btn ghost sm" data-action="add-phase">+ Add phase</button>'}
       </div>
       ${calc.restDay
-        ? '<p class="side-empty">Rest day — no active work. NEAT, TEF and background daily life still count.</p>'
+        ? `<p class="side-empty">Non-work day — walking ${calc.walking.hours.toFixed(1)} hr at MET ${NON_WORK_DAY.walkingMet}, plus general-day NEAT and TEF. No background bucket (§7).</p>`
         : calc.phases.length
           ? `<ol class="phase-list">${phaseRows}</ol>`
           : '<p class="side-empty">No task phases yet. Describe the work below and a MET is suggested automatically.</p>'}
@@ -500,9 +493,8 @@ function resultsTemplate(calc) {
         <table class="mini-table">
           <tbody>
             <tr class="raw-row"><td>${MODEL_LABELS[MODEL.RAW]}<span class="sub">${MODEL_FORMULAS[MODEL.RAW]} · QA only, never added to BMR</span></td><td class="num">${kcal(calc.comparison[MODEL.RAW])}</td></tr>
-            <tr><td>${MODEL_LABELS[MODEL.INTERMEDIATE]}<span class="sub">${MODEL_FORMULAS[MODEL.INTERMEDIATE]} · all phases</span></td><td class="num">${kcal(calc.comparison[MODEL.INTERMEDIATE])}</td></tr>
-            <tr><td>${MODEL_LABELS[MODEL.KRI]}<span class="sub">${MODEL_FORMULAS[MODEL.KRI]} · all phases</span></td><td class="num">${kcal(calc.comparison[MODEL.KRI])}</td></tr>
-            <tr class="used-row"><td>Used<span class="sub">${calc.comparison.mixed ? 'mixed per-phase selection' : 'single model across phases'} · applied to TDEE</span></td><td class="num strong">${kcal(calc.comparison.used)}</td></tr>
+            <tr class="used-row"><td>${MODEL_LABELS[MODEL.INTERMEDIATE]}<span class="sub">${MODEL_FORMULAS[MODEL.INTERMEDIATE]} · the only active model, applied to TDEE</span></td><td class="num strong">${kcal(calc.comparison[MODEL.INTERMEDIATE])}</td></tr>
+            <tr class="raw-row"><td>${MODEL_LABELS[MODEL.KRI]}<span class="sub">${MODEL_FORMULAS[MODEL.KRI]} · retired Sept 3 — restatement impact +${kcal(calc.comparison[MODEL.KRI] - calc.comparison[MODEL.INTERMEDIATE])}</span></td><td class="num">${kcal(calc.comparison[MODEL.KRI])}</td></tr>
           </tbody>
         </table>
       </details>` : ''}
@@ -532,14 +524,6 @@ export function refreshResults() {
     if (headline) headline.textContent = `${kcal(p.kcal)} kcal`;
     const alloc = document.querySelector(`[data-alloc="${p.id}"]`);
     if (alloc) alloc.textContent = allocText(p);
-    const reasons = document.querySelector(`[data-reasons="${p.id}"]`);
-    if (reasons) {
-      reasons.textContent = p.kriReasons.length
-        ? p.kriReasons.join(' · ')
-        : 'No KRI trigger — Intermediate applies';
-    }
-    const autoOption = document.querySelector(`[data-automodel="${p.id}"]`);
-    if (autoOption) autoOption.textContent = `Auto — ${MODEL_LABELS[p.autoModel]}`;
   }
   return calc;
 }
@@ -776,6 +760,7 @@ async function handleImportFile(e, form) {
   if (patch.phases && patch.phases.length) {
     draft.phases = patch.phases.map((p) => ({ ...store.newPhase(), ...p }));
   }
+  draft.importFlags = patch.importFlags || [];
   draft.notes = draft.notes ? `${patch.notes}\n\n--- previous notes ---\n${draft.notes}` : patch.notes;
 
   markDirty();

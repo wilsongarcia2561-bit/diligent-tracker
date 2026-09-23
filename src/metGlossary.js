@@ -368,7 +368,8 @@ export function bpmRevisionFromNotes(text) {
     const value = Number(m[1]);
     if (value >= MET_FLOOR && value <= MET_CEIL + 0.5) {
       const blended = /\bblended\s+MET\b/i.test(m[0]);
-      return { met: value, blended, line: line.replace(/^\s*(?:[•\-*+]\s*)?note\s*:?\s*/i, '').trim() };
+      const direction = /\brevised?\s+down|\bdownward\b/i.test(line) ? 'down' : /\brevised?\s+up|\bupward\b/i.test(line) ? 'up' : null;
+      return { met: value, blended, direction, line: line.replace(/^\s*(?:[•\-*+]\s*)?note\s*:?\s*/i, '').trim() };
     }
   }
   return null;

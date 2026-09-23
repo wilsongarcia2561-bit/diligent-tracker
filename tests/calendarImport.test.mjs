@@ -450,3 +450,29 @@ describe('job-title bullets (regression)', () => {
     assert.equal(b.phases.length, 1);
   });
 });
+
+describe('DILIGENT IV §8 data-quality flags from calendar text', () => {
+  const flagsOf = (text) => (parseCalendarLog(text).patch.importFlags || []).map((f) => f.text).join('\n');
+
+  it('flags a "half." title as carrying no duration information', () => {
+    assert.match(flagsOf('half.\nDate: 2026-08-19\nShift: 7:15 AM - 3:10 PM\n\n• Dirt haul'), /"half\." title carries no duration/);
+  });
+
+  it('flags a start_time inside the logged lunch, or before 4 AM — but not an afternoon shift starting after lunch', () => {
+    assert.match(flagsOf('Date: 2026-08-19\nShift: 12:44 PM - 3:10 PM\n(Lunch break 12:01 - 1:00)\n\n• Dirt haul'), /inside the logged lunch/);
+    assert.equal(parseCalendarLog('Date: 2026-09-03\nShift: 1:16 PM - 3:52 PM\n(Lunch break 12:22 - 1:16)\n\n• Backyard: dig a trench').patch.importFlags, undefined);
+    assert.match(flagsOf('Date: 2026-08-24\nShift: 1:12 AM - 5:52 PM\n\n• Reorganize materials'), /before 4 AM/);
+    assert.equal(parseCalendarLog('Date: 2026-08-21\nShift: 8:10 AM - 11:45 AM\n\n• Repair edge').patch.importFlags, undefined);
+  });
+
+  it('flags an empty enumerated task item', () => {
+    assert.match(flagsOf('Date: 2026-09-04\nShift: 7:39 AM - 4:38 PM\n\n1.)\n'), /task item is empty/);
+  });
+
+  it('records a downward BPM revision with a warning, and says "downward" in the basis', () => {
+    const { patch } = parseCalendarLog('Date: 2026-09-05\nShift: 7:00 AM - 2:00 PM\nFeels 106°\n\n• Put paverstone on implement stack areas, semi-rush\n\nNOTE: First downward MET revision — task read heavy (7.5) but HRR ~47%, revised to 6.0.');
+    assert.equal(patch.phases[0].met, 6.0);
+    assert.match(patch.phases[0].metBasis, /downward revision/);
+    assert.ok(patch.importFlags.some((f) => f.level === 'warn' && /Downward BPM revision/.test(f.text)));
+  });
+});

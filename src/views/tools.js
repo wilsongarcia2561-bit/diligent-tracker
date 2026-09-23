@@ -28,7 +28,7 @@ function resultBlock(watchBpm, taskMet, label) {
         <div><span class="stat-label">HRR%</span><span class="stat-value sm">${pct(r.hrr)}${r.hrrMax !== r.hrr ? `–${pct(r.hrrMax)}` : ''}</span></div>
         <div><span class="stat-label">Implied MET</span><span class="stat-value sm">${impliedText}</span></div>
       </div>
-      <div class="callout ${r.verdict === 'revise-up' ? 'warn' : r.verdict === 'validates' ? 'ok' : 'info'}">${esc(r.message)}</div>
+      <div class="callout ${r.verdict === 'revise-up' || r.verdict === 'revise-down' ? 'warn' : r.verdict === 'validates' ? 'ok' : 'info'}">${esc(r.message)}</div>
     </div>`;
 }
 

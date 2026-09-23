@@ -1,7 +1,7 @@
 /** History — a statement ledger grouped by week, every day editable after the fact (§12.5). */
 
 import { groupByWeek, mainTask, trailingAverage } from '../analytics.js';
-import { MODEL_LABELS, calculateDay } from '../engine.js';
+import { calculateDay } from '../engine.js';
 import * as store from '../store.js';
 import { esc, kcal, num, openTextPanel } from '../ui.js';
 
@@ -50,7 +50,7 @@ function toCsv(rows) {
   const header = [
     'date', 'rest_day', 'main_task', 'net_work_minutes', 'feels_like_f', 'sites', 'weight_kg',
     'bmr', 'active_kcal', 'neat_kcal', 'tef_kcal', 'background_kcal', 'tdee_kcal',
-    'kcal_raw_comparison', 'intake_kcal', 'balance_kcal', 'models_used', 'flags',
+    'kcal_raw_comparison', 'intake_kcal', 'balance_kcal', 'diligent_iv_tdee', 'flags',
   ];
   const lines = rows.map(({ entry, calc }) =>
     [
@@ -70,7 +70,7 @@ function toCsv(rows) {
       Math.round(calc.comparison.raw),
       calc.intakeKcal ?? '',
       calc.balance === null ? '' : Math.round(calc.balance),
-      [...new Set(calc.phases.map((p) => MODEL_LABELS[p.model]))].join(' + '),
+      calc.dataset?.tdee ?? '',
       calc.flags.length,
     ]
       .map((v) => {
