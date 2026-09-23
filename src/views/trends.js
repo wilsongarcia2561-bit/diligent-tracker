@@ -11,7 +11,7 @@ import {
   weeklyCandles,
 } from '../analytics.js';
 import { calculatedDays } from './history.js';
-import { esc, kcal } from '../ui.js';
+import { esc, kcal, reveal } from '../ui.js';
 
 const RANGE_KEY = 'diligent3.trendsRange';
 let range = '3M';
@@ -188,6 +188,9 @@ export function render(root, { onEdit, onLog } = {}) {
       const fresh = root.cloneNode(false);
       root.replaceWith(fresh);
       render(fresh, { onEdit, onLog });
+      // Each range redraws: charts rise again and the sections below settle in,
+      // while the header with the range buttons stays put.
+      reveal(fresh, { skip: '.trend-hero' });
       return;
     }
     const burn = e.target.closest('.burn');

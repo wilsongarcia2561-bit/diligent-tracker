@@ -763,3 +763,61 @@ input[type="checkbox"] { accent-color: var(--green); width: 15px; height: 15px; 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
+
+/* ------------------------------ motion ------------------------------ */
+
+.reveal {
+  opacity: 0;
+  transform: translateY(14px);
+  transition: opacity 0.55s cubic-bezier(0.2, 0.7, 0.2, 1), transform 0.55s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.reveal.in { opacity: 1; transform: none; }
+
+/* Trends: the allocation bar sweeps in, sparklines draw themselves, candles grow from their midpoint. */
+.trend-grid .stackbar { transform-origin: left center; animation: sweep-in 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) 0.15s both; }
+@keyframes sweep-in { from { transform: scaleX(0); } }
+
+.spark polyline { stroke-dasharray: 1; stroke-dashoffset: 1; animation: draw-in 1.1s ease-out 0.3s forwards; }
+.spark circle { opacity: 0; animation: fade-in 0.3s ease-out 1.3s forwards; }
+@keyframes draw-in { to { stroke-dashoffset: 0; } }
+@keyframes fade-in { to { opacity: 1; } }
+
+.chart.grow .body, .chart.grow .wick { transform-box: fill-box; transform-origin: center; animation: candle-grow 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both; animation-delay: var(--d, 0ms); }
+.chart.grow .candle-val { animation: fade-in 0.4s ease-out both; animation-delay: calc(var(--d, 0ms) + 350ms); opacity: 0; }
+@keyframes candle-grow { from { transform: scaleY(0); opacity: 0.2; } }
+
+/* Daily entry: TDEE breakdown readout. */
+.stack-zone .stackbar span { cursor: pointer; transition: opacity 0.18s, transform 0.18s, filter 0.18s; outline: none; }
+.stack-zone .legend-grid li { cursor: pointer; transition: opacity 0.18s, color 0.18s; }
+.stack-zone.focused .stackbar span:not(.on) { opacity: 0.28; }
+.stack-zone.focused .legend-grid li:not(.on) { opacity: 0.4; }
+.stack-zone .stackbar span.on { transform: scaleY(1.12); filter: brightness(1.12); }
+.stack-zone .legend-grid li.on { color: var(--text); }
+.stackbar span:focus-visible { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--sw); }
+
+.comp-readout {
+  margin-top: 16px; min-height: 112px; padding: 16px 18px;
+  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel-2, var(--panel));
+}
+.comp-readout .hint { color: var(--faint, var(--dim)); font-size: 13px; }
+.readout-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.readout-head h4 { margin: 0; font-size: 14px; font-weight: 600; }
+.readout-kcal { margin-left: auto; font: 700 26px var(--sans); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.readout-kcal small { font: 500 12px var(--mono); color: var(--dim); margin-left: 4px; }
+.readout-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 14px; }
+.readout-head .swatch { margin-right: 0; }
+.readout-grid div { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.readout-grid .mini-label { white-space: nowrap; }
+.readout-grid strong { font: 600 15px var(--mono); font-variant-numeric: tabular-nums; }
+.readout-grid span.sub { font-size: 11px; color: var(--dim); }
+.readout-body.enter { animation: readout-in 0.22s ease-out; }
+@keyframes readout-in { from { opacity: 0; transform: translateY(4px); } }
+@media (max-width: 720px) { .readout-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal { opacity: 1; transform: none; }
+  .spark polyline { stroke-dasharray: none; stroke-dashoffset: 0; }
+  .spark circle, .chart.grow .candle-val { opacity: 1; }
+}
+/* Candles hold their start frame until the panel scrolls into view. */
+.chart.grow.waiting .body, .chart.grow.waiting .wick, .chart.grow.waiting .candle-val { animation-play-state: paused; }

@@ -7,7 +7,7 @@ import * as trendsView from './views/trends.js';
 import * as toolsView from './views/tools.js';
 import * as referenceView from './views/reference.js';
 import * as settingsView from './views/settings.js';
-import { toast, todayIso } from './ui.js';
+import { reveal, toast, todayIso } from './ui.js';
 
 const TABS = [
   { id: 'log', label: 'Daily entry', short: 'Today' },
@@ -100,6 +100,7 @@ function mount() {
   } else if (current === 'settings') {
     settingsView.render(fresh, { onChange: () => {} });
   }
+  reveal(fresh);
 }
 
 function go(tab) {

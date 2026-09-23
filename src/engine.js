@@ -241,6 +241,25 @@ export function metFromHrr(hrr) {
 }
 
 /**
+ * The reverse of the §4 chain: what heart rate a MET implies. Interpolates
+ * inside the HRR→MET table, then takes the watch correction back off, so a
+ * day with no BPM logged can still show what its MET would read as.
+ */
+export function bpmForMet(met, resting = RESTING_HR, max = MAX_HR) {
+  const value = Number(met);
+  const row = HRR_MET_TABLE.find((r) => value >= r.metMin && value <= r.metMax);
+  if (!row) return null;
+  const hrr = row.hrrMin + ((value - row.metMin) / (row.metMax - row.metMin)) * (row.hrrMax - row.hrrMin);
+  const corrected = Math.round(resting + hrr * (max - resting));
+  // Below the moderate band's floor a watch reading gets no correction at
+  // all, so a low-end MET clamps to the lowest reading the table can use.
+  const band = BPM_CORRECTIONS.find((b) => corrected - b.add >= b.watchMin && corrected - b.add <= b.watchMax)
+    || (corrected - BPM_CORRECTIONS[0].add < BPM_CORRECTIONS[0].watchMin ? BPM_CORRECTIONS[0] : BPM_CORRECTIONS[BPM_CORRECTIONS.length - 1]);
+  const watch = Math.max(band.watchMin, corrected - band.add);
+  return { hrr: (watch + band.add - resting) / (max - resting), corrected: watch + band.add, watch, band: band.label };
+}
+
+/**
  * Full validation chain for one BPM observation (feature §12.8):
  * watch reading → correction → HRR% → implied MET → comparison against the task MET.
  *

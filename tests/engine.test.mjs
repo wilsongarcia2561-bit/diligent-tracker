@@ -23,6 +23,7 @@ import {
   summarizeTrends,
   validateWithBpm,
   walkingKcal,
+  bpmForMet,
 } from '../src/engine.js';
 
 const SETTINGS = { bmr: 1436, breakMinutesDefault: 11, restingHr: 49, maxHr: 201, weightKg: 57.6 };
@@ -523,5 +524,24 @@ describe('§12.6 trends', () => {
     assert.equal(summary.workDayCount, 2);
     assert.equal(summary.restDayCount, 1);
     close(summary.activeAverage, 1600);
+  });
+});
+
+describe('MET → implied heart rate (the §4 chain run backwards)', () => {
+  it('round-trips: the implied watch BPM validates the MET it came from', () => {
+    for (const met of [5.0, 6.0, 7.0, 8.0, 9.0]) {
+      const b = bpmForMet(met);
+      assert.equal(validateWithBpm({ watchBpm: b.watch, taskMet: met }).verdict, 'validates', `MET ${met} → watch ${b.watch}`);
+    }
+  });
+
+  it('puts Sept 5 (MET 6.0) near the documented corrected ~120 / HRR ~47%', () => {
+    const b = bpmForMet(6.0);
+    assert.ok(b.corrected >= 115 && b.corrected <= 130, `corrected ${b.corrected}`);
+    assert.ok(b.hrr > 0.45 && b.hrr < 0.55);
+  });
+
+  it('returns null below the HRR table', () => {
+    assert.equal(bpmForMet(3.3), null);
   });
 });

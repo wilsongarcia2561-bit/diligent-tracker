@@ -9,6 +9,20 @@ const NS = 'http://www.w3.org/2000/svg';
 const DAY_MS = 86400000;
 let gradientSeq = 0;
 
+const reducedMotion = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+const easeOutCubic = (t) => 1 - (1 - t) ** 3;
+
+/** Run `fn` once `el` is actually on screen, so an entrance isn't spent below the fold. */
+function whenVisible(el, fn) {
+  if (typeof IntersectionObserver === 'undefined') return fn();
+  const io = new IntersectionObserver((entries) => {
+    if (!entries.some((e) => e.isIntersecting)) return;
+    io.disconnect();
+    fn();
+  }, { threshold: 0.2 });
+  io.observe(el);
+}
+
 function el(name, attrs = {}, text) {
   const node = document.createElementNS(NS, name);
   for (const [k, v] of Object.entries(attrs)) {
@@ -70,6 +84,8 @@ export function observeWidth(host, draw) {
  * Hovering snaps a crosshair to the nearest day.
  */
 export function areaChart(host, points, rolling, { height = 300 } = {}) {
+  // The first draw rises from a flat line; redraws on resize just redraw.
+  let risen = reducedMotion();
   observeWidth(host, (width) => {
     host.replaceChildren();
     if (!points.length) {
@@ -119,16 +135,37 @@ export function areaChart(host, points, rolling, { height = 300 } = {}) {
       svg.append(el('text', { x: pad.left + (plotW * i) / (labelCount - 1), y: height - 8, 'text-anchor': anchor, class: 'tick' }, shortDate(iso)));
     }
 
-    const line = points.map((p, i) => `${i ? 'L' : 'M'}${x(p.date).toFixed(1)},${y(p.value).toFixed(1)}`).join('');
     const base = pad.top + plotH;
-    svg.append(el('path', { d: `${line}L${x(points.at(-1).date).toFixed(1)},${base}L${x(points[0].date).toFixed(1)},${base}Z`, fill: `url(#${gid})` }));
-    if (rolling.length > 1) {
-      const roll = rolling.map((p, i) => `${i ? 'L' : 'M'}${x(p.date).toFixed(1)},${y(p.value).toFixed(1)}`).join('');
-      svg.append(el('path', { d: roll, class: 'roll-line', fill: 'none' }));
-    }
-    svg.append(el('path', { d: line, class: 'area-line', fill: 'none' }));
+    // k = 0 is flat on the baseline, k = 1 is each day's real TDEE.
+    const yk = (v, k) => base + (y(v) - base) * k;
+    const trace = (list, k) => list.map((p, i) => `${i ? 'L' : 'M'}${x(p.date).toFixed(1)},${yk(p.value, k).toFixed(1)}`).join('');
+    const areaD = (k) => `${trace(points, k)}L${x(points.at(-1).date).toFixed(1)},${base}L${x(points[0].date).toFixed(1)},${base}Z`;
+    const start = risen ? 1 : 0;
+    const area = el('path', { d: areaD(start), fill: `url(#${gid})` });
+    svg.append(area);
+    const rollPath = rolling.length > 1 ? el('path', { d: trace(rolling, start), class: 'roll-line', fill: 'none' }) : null;
+    if (rollPath) svg.append(rollPath);
+    const linePath = el('path', { d: trace(points, start), class: 'area-line', fill: 'none' });
+    svg.append(linePath);
     const last = points.at(-1);
-    svg.append(el('circle', { cx: x(last.date), cy: y(last.value), r: 3.5, class: 'end-dot' }));
+    const endDot = el('circle', { cx: x(last.date), cy: yk(last.value, start), r: 3.5, class: 'end-dot' });
+    svg.append(endDot);
+    if (!risen) {
+      risen = true;
+      const DURATION = 950;
+      let t0 = null;
+      const frame = (now) => {
+        if (!svg.isConnected) return;
+        t0 ??= now;
+        const k = easeOutCubic(Math.min(1, (now - t0) / DURATION));
+        area.setAttribute('d', areaD(k));
+        linePath.setAttribute('d', trace(points, k));
+        if (rollPath) rollPath.setAttribute('d', trace(rolling, k));
+        endDot.setAttribute('cy', yk(last.value, k));
+        if (k < 1) requestAnimationFrame(frame);
+      };
+      whenVisible(host, () => setTimeout(() => requestAnimationFrame(frame), 120));
+    }
 
     const cross = el('line', { y1: pad.top, y2: base, class: 'crosshair', visibility: 'hidden' });
     const dot = el('circle', { r: 4.5, class: 'hover-dot', visibility: 'hidden' });
@@ -181,7 +218,8 @@ export function sparkline(values, color, { width = 120, height = 34 } = {}) {
   const max = Math.max(...values);
   const span = max - min || 1;
   const pts = values.map((v, i) => [2 + (i / (values.length - 1)) * (width - 6), 3 + (1 - (v - min) / span) * (height - 6)]);
-  svg.append(el('polyline', { points: pts.map((p) => p.map((n) => n.toFixed(1)).join(',')).join(' '), fill: 'none', stroke: color, 'stroke-width': 1.5, 'stroke-linejoin': 'round' }));
+  // pathLength=1 lets CSS draw the line in with a single dash.
+  svg.append(el('polyline', { pathLength: 1, points: pts.map((p) => p.map((n) => n.toFixed(1)).join(',')).join(' '), fill: 'none', stroke: color, 'stroke-width': 1.5, 'stroke-linejoin': 'round' }));
   const [ex, ey] = pts.at(-1);
   svg.append(el('circle', { cx: ex, cy: ey, r: 2.5, fill: color }));
   return svg;
@@ -192,6 +230,7 @@ export function sparkline(values, color, { width = 120, height = 34 } = {}) {
  * wick = lowest to highest single day. Shows as many recent weeks as fit.
  */
 export function candleChart(host, candles, { height = 260 } = {}) {
+  let grown = false;
   observeWidth(host, (width) => {
     host.replaceChildren();
     if (!candles.length) {
@@ -212,17 +251,21 @@ export function candleChart(host, candles, { height = 260 } = {}) {
     const slot = width / shown.length;
     const bodyW = Math.min(52, slot * 0.5);
 
-    const svg = el('svg', { width, height, class: 'chart', role: 'img', 'aria-label': 'Weekly TDEE range' });
+    // Candles grow in left to right the first time; resize redraws stay still.
+    const svg = el('svg', { width, height, class: grown || reducedMotion() ? 'chart' : 'chart grow waiting', role: 'img', 'aria-label': 'Weekly TDEE range' });
+    if (!grown) whenVisible(host, () => svg.classList.remove('waiting'));
+    grown = true;
     shown.forEach((c, i) => {
+      const delay = `--d:${250 + i * 70}ms`;
       const cx = slot * i + slot / 2;
       const tone = c.up ? 'up' : 'down';
-      svg.append(el('line', { x1: cx, x2: cx, y1: y(c.high), y2: y(c.low), class: `wick ${tone}` }));
+      svg.append(el('line', { x1: cx, x2: cx, y1: y(c.high), y2: y(c.low), class: `wick ${tone}`, style: delay }));
       const top = y(Math.max(c.open, c.close));
       const h = Math.max(3, Math.abs(y(c.open) - y(c.close)));
-      const body = el('rect', { x: cx - bodyW / 2, y: top, width: bodyW, height: h, rx: 2, class: `body ${tone}` });
+      const body = el('rect', { x: cx - bodyW / 2, y: top, width: bodyW, height: h, rx: 2, class: `body ${tone}`, style: delay });
       body.append(el('title', {}, `Week of ${shortDate(c.week)}: avg ${fmt(c.avg)}, range ${fmt(c.low)}–${fmt(c.high)} over ${c.days} day${c.days === 1 ? '' : 's'}`));
       svg.append(body);
-      svg.append(el('text', { x: cx, y: height - 24, 'text-anchor': 'middle', class: 'candle-val' }, fmt(c.avg)));
+      svg.append(el('text', { x: cx, y: height - 24, 'text-anchor': 'middle', class: 'candle-val', style: delay }, fmt(c.avg)));
       svg.append(el('text', { x: cx, y: height - 8, 'text-anchor': 'middle', class: 'tick' }, shortDate(c.week)));
     });
     host.append(svg);

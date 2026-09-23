@@ -137,3 +137,44 @@ export function openTextPanel({ title, hint, text }) {
   document.body.append(backdrop);
   backdrop.querySelector('[data-copy]').focus();
 }
+
+/* ------------------------------ motion ------------------------------ */
+
+export const reducedMotion = () =>
+  typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/** Blocks that fade up into place when a screen opens or scrolls into view. */
+const REVEAL_TARGETS = [
+  ':scope > *',
+  '.card', '.panel', '.stat', '.mini', '.inset',
+  '.result-main', '.result-side', '.side-block', '.phase-row', '.strip',
+  '.trend-grid > *', '.burns > li', '.ledger', '.chart-legend',
+].join(', ');
+
+let revealObserver = null;
+
+/**
+ * Fade-and-rise each block of a freshly rendered screen into position. Blocks
+ * already on screen come in right away, staggered top to bottom; the rest
+ * wait until they're scrolled to. Pass `skip` to leave some blocks alone.
+ */
+export function reveal(root, { skip = '' } = {}) {
+  if (!root) return;
+  const targets = [...root.querySelectorAll(REVEAL_TARGETS)].filter((el) => !(skip && el.closest(skip)));
+  if (reducedMotion() || typeof IntersectionObserver === 'undefined') return;
+  revealObserver ||= new IntersectionObserver((entries) => {
+    const incoming = entries.filter((e) => e.isIntersecting).map((e) => e.target);
+    incoming.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+    incoming.forEach((el, i) => {
+      el.style.transitionDelay = `${Math.min(i * 55, 440)}ms`;
+      el.classList.add('in');
+      revealObserver.unobserve(el);
+      // Clear the delay once it has played so later hovers/transitions aren't slowed.
+      setTimeout(() => { el.style.transitionDelay = ''; }, 1200);
+    });
+  }, { rootMargin: '0px 0px -6% 0px', threshold: 0.01 });
+  for (const el of targets) {
+    el.classList.add('reveal');
+    revealObserver.observe(el);
+  }
+}

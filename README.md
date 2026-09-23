@@ -86,6 +86,14 @@ The parser works line by line (a table row or line with a clock time and a heart
 the nearest date above it), so it has only been checked against synthetic exports in the
 layouts Samsung is likely to use — `tests/fixtures/sample-hr-export.html` — not a real one yet.
 
+**Motion.** Every tab's blocks fade up into place when it opens or as they scroll into view.
+On Trends, the TDEE chart rises from a flat line to each day's value (on every range switch),
+the allocation bar sweeps in, sparklines draw themselves and weekly candles grow once their
+panel is on screen. On Daily entry, hovering (or tapping/holding on touch, or focusing) a
+segment or legend row of the TDEE breakdown shows that line's kcal, share, hours, rate and heart
+rate — measured from an HR export when there is one, otherwise what the day's MET implies
+through the §4 chain run backwards. All of it is off under `prefers-reduced-motion`.
+
 **TEF (§2).** 210 kcal standard. If a daily intake is logged and differs from the 2,000 kcal
 baseline by more than 15%, TEF is re-suggested at 10% of actual intake. Overridable.
 

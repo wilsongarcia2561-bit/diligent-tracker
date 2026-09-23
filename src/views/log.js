@@ -19,6 +19,7 @@ import {
   MODEL,
   MODEL_FORMULAS,
   MODEL_LABELS,
+  bpmForMet,
   durationMinutes,
   formatDuration,
   calculateDay,
@@ -484,12 +485,15 @@ function resultsTemplate(calc) {
         <div class="mini"><span class="mini-label">vs 7D avg</span><span class="mini-val ${vs === null ? 'faint' : vs >= 0 ? 'up' : 'down'}">${vs === null ? '—' : signed(vs)}</span>${vs === null ? '<span class="mini-sub">no days in the prior week</span>' : ''}</div>
       </div>
 
-      <div class="stackbar tall" role="img" aria-label="Today's TDEE split by component">
-        ${COMPONENTS.map((c) => `<span class="${c.estimate ? 'est' : ''}" style="flex:${Math.max(0.001, calc.components[c.key] || 0)};--sw:${c.color}" title="${label(c)}: ${kcal(calc.components[c.key])} kcal"></span>`).join('')}
+      <div class="stack-zone">
+        <div class="stackbar tall" role="group" aria-label="Today's TDEE split by component — focus a segment for its detail">
+          ${COMPONENTS.map((c) => `<span class="${c.estimate ? 'est' : ''}" data-comp="${c.key}" tabindex="0" role="button" aria-label="${label(c)}: ${kcal(calc.components[c.key])} kcal" style="flex:${Math.max(0.001, calc.components[c.key] || 0)};--sw:${c.color}"></span>`).join('')}
+        </div>
+        <ul class="legend-grid">
+          ${COMPONENTS.map((c) => `<li data-comp="${c.key}"><span class="swatch" style="--sw:${c.color}"></span><span>${label(c)}${c.estimate ? ' <span class="est-tag">EST</span>' : ''}</span><strong>${kcal(calc.components[c.key])}</strong></li>`).join('')}
+        </ul>
+        <div class="comp-readout" aria-live="polite"><p class="hint">Hover, tap or hold a segment to see its kcal, hours and heart rate.</p></div>
       </div>
-      <ul class="legend-grid">
-        ${COMPONENTS.map((c) => `<li><span class="swatch" style="--sw:${c.color}"></span><span>${label(c)}${c.estimate ? ' <span class="est-tag">EST</span>' : ''}</span><strong>${kcal(calc.components[c.key])}</strong></li>`).join('')}
-      </ul>
     </div>
 
     <div class="result-side">
@@ -532,6 +536,113 @@ function resultsTemplate(calc) {
   </div>`;
 }
 
+/* ---------------------- TDEE breakdown readout ---------------------- */
+
+let readoutCalc = null;
+
+const cell = (labelText, value, sub = '') => `<div><span class="mini-label">${labelText}</span><strong>${value}</strong>${sub ? `<span class="sub">${sub}</span>` : ''}</div>`;
+
+/** Heart rate behind the active line: measured if we have it, else what the MET implies. */
+function activeBpmCell(calc, settings) {
+  const d = calc.hr && calc.hr.day;
+  if (d && d.stats) {
+    return cell('Heart rate', `${d.stats.median} → ${d.correctedBpm}`, `watch → corrected · HRR ${Math.round(d.hrr * 100)}% · ${d.stats.n} readings`);
+  }
+  const logged = calc.phases.filter((p) => p.bpm && !p.bpm.fromExport).sort((a, b) => b.bpm.correctedBpm - a.bpm.correctedBpm)[0];
+  if (logged) {
+    return cell('Heart rate', `${logged.bpm.watchBpm} → ${logged.bpm.correctedBpm}`, `watch → corrected · HRR ${Math.round(logged.bpm.hrr * 100)}% · logged`);
+  }
+  const met = calc.restDay ? NON_WORK_DAY.walkingMet : calc.blendedMet;
+  const implied = met ? bpmForMet(met, settings.restingHr, settings.maxHr) : null;
+  if (!implied) return cell('Heart rate', '—', met ? `MET ${num(met, 1)} is below the HRR table` : 'no MET logged');
+  return cell('Heart rate', `~${implied.watch} → ${implied.corrected}`, `implied by MET ${num(met, 2)} · HRR ${Math.round(implied.hrr * 100)}% · no HR logged`);
+}
+
+function readoutHtml(key, calc) {
+  const settings = store.getSettings();
+  const c = COMPONENTS.find((x) => x.key === key);
+  const value = calc.components[key] || 0;
+  const share = calc.tdee ? `${((value / calc.tdee) * 100).toFixed(1)}% of TDEE` : '';
+  const names = { active: calc.restDay ? 'Walking' : 'Active work', neat: calc.restDay ? 'General NEAT' : 'Post-work NEAT' };
+  let cells = '';
+  if (key === 'bmr') {
+    cells = cell('Hours', '24h 00m', 'all day, at rest')
+      + cell('Rate', `${kcal(value / 24)} kcal/hr`, 'MET 1.0')
+      + cell('Heart rate', `~${settings.restingHr}`, 'resting baseline');
+  } else if (key === 'active') {
+    const minutes = calc.restDay ? (calc.walking ? calc.walking.hours * 60 : 0) : calc.timing.netWorkMinutes;
+    const worked = calc.phases.filter((p) => p.netMinutes > 0).length;
+    cells = cell('Hours', formatDuration(minutes), calc.restDay ? `walking · MET ${NON_WORK_DAY.walkingMet}` : `net work · ${worked} phase${worked === 1 ? '' : 's'}`)
+      + cell('Rate', minutes ? `${kcal(value / (minutes / 60))} kcal/hr` : '—', calc.restDay ? '' : calc.blendedMet ? `blended MET ${calc.blendedMet.toFixed(2)}` : 'no MET yet')
+      + activeBpmCell(calc, settings);
+  } else if (key === 'neat') {
+    const tier = NEAT_TIERS.find((t) => t.id === calc.neat.tier);
+    cells = calc.restDay
+      ? cell('Basis', 'General day', '~90–100 kcal (§7)')
+      : cell('Tier', esc(tier ? tier.label : '—'), tier ? `${tier.min}–${tier.max} kcal` : '')
+        + cell('When', 'After work', 'evening movement, chores')
+        + cell('Source', calc.neat.custom ? 'Entered' : 'Auto tier', 'estimate');
+  } else if (key === 'tef') {
+    cells = cell('Basis', calc.tef.suggestion.adjusted ? '10% of intake' : 'Baseline', esc(calc.tef.suggestion.reason))
+      + cell('Intake', calc.intakeKcal ? `${kcal(calc.intakeKcal)} kcal` : '—', calc.intakeKcal ? 'logged' : 'not logged')
+      + cell('When', 'Across meals', 'digesting food');
+  } else if (key === 'background') {
+    const tier = BACKGROUND_TIERS.find((t) => t.id === calc.background.tier);
+    cells = calc.restDay
+      ? cell('Basis', 'Folded into NEAT', 'no separate bucket on a non-work day (§7)')
+      : cell('Tier', esc(tier ? tier.label : '—'), `${calc.siteCount} site${calc.siteCount === 1 ? '' : 's'}`)
+        + cell('Covers', 'Routine', 'commute, breaks, lunch sitting')
+        + cell('Source', calc.background.custom ? 'Entered' : 'Auto tier', 'estimate');
+  }
+  return `<div class="readout-body enter">
+    <div class="readout-head">
+      <span class="swatch" style="--sw:${c.color}"></span><h4>${names[key] || c.label}${c.estimate ? ' <span class="est-tag">EST</span>' : ''}</h4>
+      <span class="faint small">${share}</span>
+      <span class="readout-kcal">${kcal(value)}<small>kcal</small></span>
+    </div>
+    <div class="readout-grid">${cells}</div>
+  </div>`;
+}
+
+let shownComp = null;
+
+function showComp(zone, key) {
+  if (!zone || !readoutCalc || key === shownComp) return;
+  shownComp = key;
+  zone.classList.toggle('focused', Boolean(key));
+  zone.querySelectorAll('[data-comp]').forEach((el) => el.classList.toggle('on', el.dataset.comp === key));
+  zone.querySelector('.comp-readout').innerHTML = key
+    ? readoutHtml(key, readoutCalc)
+    : '<p class="hint">Hover, tap or hold a segment to see its kcal, hours and heart rate.</p>';
+}
+
+/** Hover (mouse), press/hold (touch) or keyboard focus on a segment or legend row. */
+function wireReadout(host) {
+  host.addEventListener('pointerover', (e) => {
+    if (e.pointerType !== 'mouse') return;
+    const t = e.target.closest('[data-comp]');
+    if (t) showComp(t.closest('.stack-zone'), t.dataset.comp);
+  });
+  host.addEventListener('pointerout', (e) => {
+    if (e.pointerType !== 'mouse') return;
+    const zone = e.target.closest('.stack-zone');
+    if (zone && !zone.contains(e.relatedTarget)) showComp(zone, null);
+  });
+  host.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse') return;
+    const t = e.target.closest('[data-comp]');
+    // A tap sticks until another segment is tapped, or anywhere else in the panel.
+    showComp(host.querySelector('.stack-zone'), t ? t.dataset.comp : null);
+  });
+  host.addEventListener('focusin', (e) => {
+    const t = e.target.closest('[data-comp]');
+    if (t) showComp(t.closest('.stack-zone'), t.dataset.comp);
+  });
+  host.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') showComp(host.querySelector('.stack-zone'), null);
+  });
+}
+
 function hrBlock(calc) {
   const hr = calc.hr;
   if (!hr) return '';
@@ -567,6 +678,8 @@ export function refreshResults() {
   const calc = calculateDay(withResolvedWeight(draft), store.getSettings());
   const open = new Map([...host.querySelectorAll('details[data-key]')].map((d) => [d.dataset.key, d.open]));
   host.innerHTML = resultsTemplate(calc);
+  readoutCalc = calc;
+  shownComp = null;
   // Keep the reader's expanded/collapsed choice across live recalculation —
   // by name, since sections come and go (the heart-rate block, for one).
   host.querySelectorAll('details[data-key]').forEach((d) => {
@@ -609,6 +722,7 @@ export function render(root) {
     if (!e.target.matches(TYPED)) onFieldEvent(e, form);
   });
   form.addEventListener('click', (e) => onClick(e, form));
+  wireReadout(root.querySelector('#results'));
   // "+ Add phase" in the result summary lives outside the form.
   root.querySelector('#results').addEventListener('click', (e) => {
     const applyDay = e.target.closest('[data-action="apply-hr-day"]');
