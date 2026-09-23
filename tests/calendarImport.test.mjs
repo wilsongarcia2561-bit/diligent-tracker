@@ -72,8 +72,8 @@ describe('calendar log import — real calendar text', () => {
     assert.match(patch.notes, /Imported from day\.md/);
   });
 
-  it('lists exactly what still needs to be filled in by hand', () => {
-    assert.deepEqual(unmatched.sort(), ['date', 'intake', 'shift', 'siteCount', 'weight'].sort());
+  it('lists exactly what still needs to be filled in by hand — weight and intake are optional', () => {
+    assert.deepEqual(unmatched.sort(), ['date', 'shift', 'siteCount'].sort());
   });
 });
 
@@ -156,7 +156,7 @@ describe('calendar log import — degenerate input', () => {
     const { patch, matched, unmatched } = parseCalendarLog('', { fallbackDate: '2026-01-01' });
     assert.equal(patch.date, '2026-01-01');
     assert.equal(matched.length, 0);
-    assert.equal(unmatched.length, 9);
+    assert.equal(unmatched.length, 7);
     assert.match(patch.notes, /Imported\./);
   });
 
@@ -319,10 +319,18 @@ describe('parseMultiDayLog — sanitized fixture built from real calendar data',
     assert.equal(day.siteCount, undefined, '"(not logged)" must not count as one site');
   });
 
-  it('excludes the Sep 11 bulleted NOTE from tasks', () => {
+  it('excludes the Sep 11 bulleted NOTE and the "…job" title bullet from tasks', () => {
     const day = results.find((r) => r.patch.date === '2026-09-11').patch;
-    assert.equal(day.phases.length, 3);
-    assert.ok(!day.phases.some((p) => /^NOTE/i.test(p.description)));
+    assert.equal(day.phases.length, 2);
+    assert.ok(!day.phases.some((p) => /^NOTE|job$/i.test(p.description)));
+    assert.match(day.notes, /Job: Sprinkler & retaining wall job/);
+  });
+
+  it('Sep 11 digs take the soil from the day\'s NOTE line (compacted red clay → HCP)', () => {
+    const day = results.find((r) => r.patch.date === '2026-09-11').patch;
+    const trench = day.phases.find((p) => /Trench/.test(p.description));
+    assert.equal(trench.soilCode, 'HCP');
+    assert.equal(trench.met, 8.5);
   });
 
   it('extracts per-bullet times on Sep 19 but leaves the untimed middle bullet as-is', () => {
@@ -334,10 +342,95 @@ describe('parseMultiDayLog — sanitized fixture built from real calendar data',
     assert.equal(day.phases[2].start, '09:26');
   });
 
-  it('leaves "(Return, 11:37 - end)" on Sep 12 as description text, not a guessed time', () => {
+  it('resolves "(Return, 11:37 - end)" on Sep 12 against that day\'s own logged shift end', () => {
     const day = results.find((r) => r.patch.date === '2026-09-12').patch;
-    const returnPhase = day.phases.find((p) => /^\(Return/.test(p.description));
+    const returnPhase = day.phases.find((p) => /^Dump gravel/.test(p.description));
     assert.ok(returnPhase);
-    assert.equal(returnPhase.start, '');
+    assert.equal(returnPhase.start, '11:37');
+    assert.equal(returnPhase.end, '12:12');
+  });
+
+  it('applies the BPM-confirmed revision from the Aug 31 note over the task-based estimate', () => {
+    const day = results.find((r) => r.patch.date === '2026-08-31').patch;
+    assert.equal(day.phases[0].met, 7.5);
+    assert.equal(day.phases[0].metSource, 'bpm-note');
+  });
+
+  it('reads "Lunch break: post shift" as nothing to subtract, not as missing', () => {
+    const r = results.find((x) => x.patch.date === '2026-09-12');
+    assert.ok(!r.unmatched.includes('lunch'));
+    assert.match(r.patch.notes, /outside the shift window/);
+  });
+});
+
+describe('reading the day — times, non-labor time and automatic MET', () => {
+  const SEP2 = `Date: 2026-09-02
+Shift: 7:25 AM - 4:09 PM
+94° (Feels 100° Sunny)
+Breaks: 3
+(Lunch break 12:22 - 12:59)
+
+• (Beginning - 8:49) Remove brick patio by shovel, haul to trailer
+• (8:49 - after lunch) Uni lectures — NOT active labor, sedentary block
+• (Post lunch - end shift) Clean up backyard, hauling debris (branches, bushes, stone) to trailer`;
+
+  it('resolves "Beginning", "after lunch" and "end shift" to the day\'s logged times', () => {
+    const { patch } = parseCalendarLog(SEP2);
+    assert.equal(patch.phases.length, 2, 'the lecture block is not a phase');
+    assert.deepEqual([patch.phases[0].start, patch.phases[0].end], ['07:25', '08:49']);
+    assert.deepEqual([patch.phases[1].start, patch.phases[1].end], ['12:59', '16:09']);
+  });
+
+  it('excludes the lecture block from active time, net of the lunch it overlaps', () => {
+    const { patch } = parseCalendarLog(SEP2);
+    // 8:49 → 12:59 is 250 min, minus the 37-min lunch already subtracted.
+    assert.equal(patch.transitMinutes, 213);
+    assert.match(patch.notes, /Excluded 213 min of non-labor time/);
+  });
+
+  it('assigns every labor phase a MET from the glossary with its reasoning', () => {
+    const { patch, metReport } = parseCalendarLog(SEP2);
+    assert.equal(patch.phases[0].met, 6.5, 'brick removal by shovel');
+    assert.match(patch.phases[0].metBasis, /Brick \/ paver removal/);
+    assert.equal(patch.phases[1].metConfidence, 'low', 'branch/brush hauling is a known under-description risk');
+    assert.equal(metReport.phases, 2);
+  });
+
+  const AUG27 = `Date: 2026-08-27
+Shift: 9:11 AM - 5:40 PM
+89° (Feels 93° Sunny)
+Breaks: 6
+(Lunch break 12:46 - 1:45)
+
+• Sod work, left 10:25
+• Went to get gravel, wrong gravel so had to return, difficult (documented idle/travel, ~2h21m)
+• Arrived 1:45, peel for flowerbed & implement gravel, plant 5 little plants (left 4:23)
+• Arrived 4:33, polymer sand joint on patio and pack up all equipment and materials`;
+
+  it('builds multi-site windows from "left"/"Arrived" markers, reading bare times against the shift', () => {
+    const { patch } = parseCalendarLog(AUG27);
+    const [sod, beds, polymer] = patch.phases;
+    assert.deepEqual([sod.start, sod.end], ['09:11', '10:25']);
+    assert.deepEqual([beds.start, beds.end], ['13:45', '16:23'], '1:45 and 4:23 fall in the afternoon of this shift');
+    assert.deepEqual([polymer.start, polymer.end], ['16:33', '17:40']);
+    assert.equal(beds.description, 'peel for flowerbed & implement gravel, plant 5 little plants');
+  });
+
+  it('takes a stated idle duration as excluded time', () => {
+    const { patch } = parseCalendarLog(AUG27);
+    assert.equal(patch.transitMinutes, 141);
+  });
+
+  it('limits an untimed pack-up-only block to 10 minutes', () => {
+    const { patch } = parseCalendarLog(`Date: 2026-09-01\nShift: 1:22 PM - 5:29 PM\n• Implement thick landscape lumber to flowerbed\n• Pack up equipment from that hill`);
+    const pack = patch.phases.find((p) => /Pack up/.test(p.description));
+    assert.equal(pack.netMinutesOverride, 10);
+  });
+
+  it('skips payroll-only entries in a multi-day file', () => {
+    const results = parseMultiDayLog('STARTING PAY.\n\n---\n\nDate: 2026-09-21\nShift: 8:00 AM - 4:00 PM\n• Water sod');
+    assert.equal(results[0].patch, null);
+    assert.equal(results[0].skipped, 'payroll entry');
+    assert.equal(results[1].patch.date, '2026-09-21');
   });
 });

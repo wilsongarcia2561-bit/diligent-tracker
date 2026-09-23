@@ -26,14 +26,18 @@
  * Anything not on this list (weight, intake, notes) is left for manual entry.
  */
 
-import { suggestMet } from './engine.js';
+import { bpmRevisionFromNotes, classifyTask, daySoil, isShadeDay, nonLaborReason } from './metGlossary.js';
 
 const MONTHS = {
   jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
   jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
 };
 
-const CHECKLIST = ['date', 'shift', 'lunch', 'breaks', 'heat', 'siteCount', 'tasks', 'weight', 'intake'];
+/** What a calendar day should state. Weight and intake rarely appear in a
+ * calendar and have sensible fallbacks (the weight log, the TEF baseline), so
+ * their absence is tracked separately instead of being reported as missing. */
+const REQUIRED = ['date', 'shift', 'lunch', 'breaks', 'heat', 'siteCount', 'tasks'];
+const OPTIONAL = ['weight', 'intake'];
 
 function pad2(n) {
   return String(n).padStart(2, '0');
@@ -126,6 +130,10 @@ function parseShift(text) {
 }
 
 function parseLunch(text) {
+  // "Lunch break: post shift" / "before start shift" — the meal sat outside
+  // the logged window, so there's nothing to subtract (glossary §6).
+  const outside = text.match(/lunch[^\n]*?\b(post[\s-]*shift|after\s+(?:the\s+)?shift|before\s+(?:the\s+)?(?:start(?:\s+of)?\s+)?shift|pre[\s-]*shift)\b/i);
+  if (outside) return { outside: outside[1].toLowerCase() };
   const re = new RegExp(`lunch(?:[ \\t]*break)?[ \\t]*:?[ \\t]*${TIME}[ \\t]*${RANGE_JOIN}[ \\t]*${TIME}`, 'i');
   const m = text.match(re);
   if (!m) return null;
@@ -204,57 +212,156 @@ function parseIntake(text) {
   return m ? Number(m[0].replace(/,/g, '')) : null;
 }
 
+/* ------------------------------ task timing ------------------------------ */
+
+function toMin(hhmm) {
+  if (!hhmm) return null;
+  const [h, m] = hhmm.split(':').map(Number);
+  return h * 60 + m;
+}
+
+function fromMin(n) {
+  return `${pad2(Math.floor(n / 60) % 24)}:${pad2(n % 60)}`;
+}
+
 /**
- * Bullet or numbered lines become task phases. The bullet char and the text
- * needn't have a space between them — real calendar exports are inconsistent
- * about it ("•REPAIR SPRINKLERS" with no space is a real example).
- *
- * A bullet that opens with a clean "(HH:MM - HH:MM)" gets that range read off
- * as the phase's start/end — a real, recurring format. Anything looser
- * ("(Beginning - 8:49)", "(Return, 11:37 - end)") is left as plain
- * description text rather than guessed at, consistent with this module's
- * precision-over-recall design.
+ * A bare clock time inside a work day ("Arrived 1:45", "left 4:23") carries
+ * no AM/PM, so it's read as whichever of h or h+12 falls inside the shift
+ * window. Explicit AM/PM always wins; with no shift known it stays literal.
  */
-const LEADING_TIME_RANGE = new RegExp(`^\\([ \\t]*${TIME}[ \\t]*${RANGE_JOIN}[ \\t]*${TIME}[ \\t]*\\)[ \\t]*(.*)$`);
-
-function parseTasks(text) {
-  const lines = text.split(/\r?\n/);
-  const tasks = [];
-  for (const line of lines) {
-    const bullet = line.match(/^[ \t]*(?:[•\-*+]|\d+[.)])[ \t]*(.+?)[ \t]*$/);
-    if (!bullet) continue;
-    const raw = bullet[1].trim();
-    if (!raw) continue;
-    // A bulleted "NOTE: ..." line is context/commentary, not a task — it's
-    // still preserved verbatim in the day's Notes via the raw-text dump
-    // below, just not turned into a zero-duration phase that would steal
-    // allocated time from the real tasks around it.
-    if (/^note\b[:\s]/i.test(raw)) continue;
-
-    const timed = raw.match(LEADING_TIME_RANGE);
-    if (timed) {
-      const start = normalizeClockTime(timed[1]);
-      const end = normalizeClockTime(timed[2]);
-      const rest = timed[3].trim();
-      if (start && end && rest) {
-        tasks.push({ description: rest, start, end });
-        continue;
-      }
-    }
-    tasks.push({ description: raw, start: '', end: '' });
+function inferClock(raw, ctx) {
+  const m = String(raw || '').trim().match(/^(\d{1,2}):(\d{2})\s*([AaPp]\.?[Mm]\.?)?$/);
+  if (!m) return null;
+  if (m[3]) return normalizeClockTime(raw);
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h > 23 || min > 59) return null;
+  const s = toMin(ctx.shiftStart);
+  const e = toMin(ctx.shiftEnd);
+  if (s !== null && e !== null && h < 12) {
+    const inside = (t) => t >= s - 60 && t <= e + 60;
+    const am = h * 60 + min;
+    const pm = am + 12 * 60;
+    if (!inside(am) && inside(pm)) return fromMin(pm);
   }
-  return tasks;
+  return fromMin(h * 60 + min);
+}
+
+/**
+ * One side of a "(start - end)" prefix: a clock time, or a word pinned to the
+ * day's own logged shift/lunch times — "Beginning", "end shift", "after
+ * lunch". These aren't guesses; they only resolve when the day states the
+ * time they refer to.
+ */
+function resolveEndpoint(raw, ctx) {
+  const s = String(raw || '').replace(/^(?:return(?:ed)?|back|resumed?|arrived?)\b[\s,:]*/i, '').trim();
+  const clock = inferClock(s, ctx);
+  if (clock) return clock;
+  if (/^(?:the\s+)?(?:beginning|begin|start)(?:\s+of\s+(?:the\s+)?shift)?$|^shift\s+start$/i.test(s)) return ctx.shiftStart || null;
+  if (/^(?:the\s+)?end(?:\s+(?:of\s+(?:the\s+)?)?shift)?$|^shift\s+end$|^close$|^finish$/i.test(s)) return ctx.shiftEnd || null;
+  if (/^(?:after|post)[\s-]*lunch$/i.test(s)) return ctx.lunchEnd || null;
+  if (/^(?:before|pre)[\s-]*lunch$/i.test(s)) return ctx.lunchStart || null;
+  return null;
+}
+
+const PAREN_RANGE = [
+  /^\(\s*(.+?)\s+(?:-|–|—|to)\s+(.+?)\s*\)\s*(.*)$/i,
+  /^\(\s*([^()\s]+?)\s*(?:-|–|—)\s*([^()\s]+?)\s*\)\s*(.*)$/,
+];
+const CLOCK_IN_TEXT = '(\\d{1,2}:\\d{2}(?:\\s*[AaPp]\\.?[Mm]\\.?)?)';
+const ARRIVED = new RegExp(`\\barrived?\\s+(?:at\\s+)?${CLOCK_IN_TEXT}[,;]?\\s*`, 'i');
+const LEFT = new RegExp(`[,;]?\\s*\\(?\\s*\\b(?:left|leave|departed?)\\s+(?:at\\s+)?${CLOCK_IN_TEXT}\\s*\\)?`, 'i');
+const DURATION = /~?\s*(\d+)\s*h(?:ours?|rs?)?\s*(\d+)\s*m(?:in(?:utes)?)?\b|~?\s*(\d+)\s*min(?:utes)?\b/i;
+
+/**
+ * Bullet or numbered lines become task blocks. The bullet char and the text
+ * needn't have a space between them — real exports are inconsistent
+ * ("•REPAIR SPRINKLERS"). A bulleted NOTE line is commentary, and a first
+ * bullet like "Patio job" / "Sod day" names the job rather than a task; both
+ * stay in the day's notes but never become phases.
+ *
+ * Each block's time window comes from what the day actually says: a leading
+ * "(8:10 - 10:33)" or "(Post lunch - end shift)", "Arrived 1:45" / "left
+ * 4:23" markers, and the shift edges for the first and last blocks.
+ */
+function parseTasks(text, ctx) {
+  const bullets = [];
+  for (const line of text.split(/\r?\n/)) {
+    const b = line.match(/^[ \t]*(?:[•\-*+]|\d+[.)])[ \t]*(.+?)[ \t]*$/);
+    if (!b) continue;
+    const raw = b[1].trim();
+    if (!raw || /^note\b[:\s]/i.test(raw)) continue;
+    bullets.push(raw);
+  }
+  let header = '';
+  if (bullets.length > 1 && /\b(?:job|day)\s*[.:]?$/i.test(bullets[0])) header = bullets.shift();
+
+  const blocks = bullets.map((raw) => {
+    let description = raw;
+    let start = null;
+    let end = null;
+    for (const re of PAREN_RANGE) {
+      const m = description.match(re);
+      if (!m) continue;
+      const s = resolveEndpoint(m[1], ctx);
+      const e = resolveEndpoint(m[2], ctx);
+      if (s && e && m[3].trim()) {
+        start = s;
+        end = e;
+        description = m[3].trim();
+      }
+      break;
+    }
+    const arrived = description.match(ARRIVED);
+    if (arrived) {
+      start = start || inferClock(arrived[1], ctx);
+      description = description.replace(ARRIVED, '');
+    }
+    const left = description.match(LEFT);
+    if (left) {
+      end = end || inferClock(left[1], ctx);
+      description = description.replace(LEFT, '');
+    }
+    description = description.replace(/^[\s,;:–-]+|[\s,;:–-]+$/g, '').replace(/\s{2,}/g, ' ');
+    const d = raw.match(DURATION);
+    const durationMinutes = d ? (d[3] ? Number(d[3]) : Number(d[1]) * 60 + Number(d[2])) : null;
+    return { raw, description: description || raw, start, end, durationMinutes };
+  });
+
+  const labor = blocks.filter((b) => !nonLaborReason(b.raw));
+  if (labor.length) {
+    const first = labor[0];
+    const last = labor[labor.length - 1];
+    if (!first.start && first.end && ctx.shiftStart) first.start = ctx.shiftStart;
+    if (!last.end && last.start && ctx.shiftEnd) last.end = ctx.shiftEnd;
+  }
+  return { header, blocks };
+}
+
+/** Minutes a non-labor block removes from active time — its stated duration,
+ * or its window minus any overlap with lunch (already subtracted). */
+function nonLaborMinutes(block, ctx) {
+  if (block.durationMinutes) return block.durationMinutes;
+  if (!block.start || !block.end) return null;
+  const s = toMin(block.start);
+  let e = toMin(block.end);
+  if (e <= s) e += 24 * 60;
+  const ls = toMin(ctx.lunchStart);
+  const le = toMin(ctx.lunchEnd);
+  const lunchOverlap = ls !== null && le !== null ? Math.max(0, Math.min(e, le) - Math.max(s, ls)) : 0;
+  return Math.max(0, e - s - lunchOverlap);
 }
 
 /**
  * @param {string} text        extracted plain text
  * @param {object} opts        { filename, fallbackDate }
- * @returns {{patch: object, matched: string[], unmatched: string[]}}
+ * @returns {{patch: object, matched: string[], unmatched: string[], optionalMissing: string[], metReport: object}}
  */
 export function parseCalendarLog(text, opts = {}) {
   const body = String(text || '');
   const matched = [];
   const patch = {};
+  const noteLines = [];
 
   const parsedDate = parseDate(body, opts.filename);
   patch.date = parsedDate || opts.fallbackDate || null;
@@ -268,7 +375,10 @@ export function parseCalendarLog(text, opts = {}) {
   }
 
   const lunch = parseLunch(body);
-  if (lunch) {
+  if (lunch?.outside) {
+    matched.push('lunch');
+    noteLines.push(`Lunch fell outside the shift window (${lunch.outside}) — nothing subtracted from work time (glossary §6).`);
+  } else if (lunch) {
     patch.lunchStart = lunch.start;
     patch.lunchEnd = lunch.end;
     matched.push('lunch');
@@ -305,27 +415,80 @@ export function parseCalendarLog(text, opts = {}) {
     matched.push('intake');
   }
 
-  const tasks = parseTasks(body);
-  if (tasks.length) {
-    patch.phases = tasks.map((t) => {
-      const suggestion = suggestMet(t.description);
-      return {
-        description: t.description,
-        start: t.start || '',
-        end: t.end || '',
-        met: suggestion ? suggestion.met : '',
-        captureCategory: suggestion ? suggestion.capture : '',
-      };
+  const timeCtx = { shiftStart: patch.shiftStart, shiftEnd: patch.shiftEnd, lunchStart: patch.lunchStart, lunchEnd: patch.lunchEnd };
+  const { header, blocks } = parseTasks(body, timeCtx);
+  const dayCtx = { feelsLikeF: patch.feelsLikeF ?? null, shade: isShadeDay(body), daySoil: daySoil(body) };
+  if (header) noteLines.push(`Job: ${header}`);
+
+  const phases = [];
+  let excludedMinutes = 0;
+  for (const b of blocks) {
+    const c = classifyTask(b.description, dayCtx);
+    if (c.nonLabor) {
+      const minutes = nonLaborMinutes(b, timeCtx);
+      if (minutes === null) {
+        noteLines.push(`Non-labor block "${b.description}" (${c.nonLabor}) has no stated duration — enter it under Non-work time.`);
+      } else {
+        excludedMinutes += minutes;
+        noteLines.push(`Excluded ${minutes} min of non-labor time: "${b.description}" (${c.nonLabor}, glossary §6).`);
+      }
+      continue;
+    }
+    const timed = Boolean(b.start && b.end);
+    const packUpCap = c.packUp && !timed;
+    phases.push({
+      description: b.description,
+      start: timed ? b.start : '',
+      end: timed ? b.end : '',
+      met: c.met,
+      captureCategory: c.captureCategory,
+      soilCode: c.soilCode,
+      netMinutesOverride: packUpCap ? 10 : '',
+      metAuto: true,
+      metSource: c.source,
+      metConfidence: c.confidence,
+      metBasis: packUpCap ? `${c.basis} · pack-up limited to 10 min (§4)` : c.basis,
+      metNotes: c.notes,
     });
+  }
+  if (excludedMinutes) patch.transitMinutes = excludedMinutes;
+
+  const revision = bpmRevisionFromNotes(body);
+  if (revision && phases.length) {
+    for (const p of phases) {
+      const prior = p.met === '' ? 'none' : p.met;
+      p.met = revision.met;
+      p.metSource = 'bpm-note';
+      p.metConfidence = 'high';
+      p.metBasis = `BPM-confirmed ${revision.blended ? 'blended day MET' : 'revision'} from the day's note (task-based estimate was ${prior}): "${revision.line}"`;
+      p.metNotes = (p.metNotes || []).filter((n) => n.level !== 'warn');
+    }
+    if (phases.length > 1) {
+      noteLines.push(`Day-level MET ${revision.met} from the note applied to all ${phases.length} phases, so the day blends to it exactly${revision.blended ? ' — per-block split in the note needs phase times to map' : ''}.`);
+    }
+  }
+
+  if (phases.length) {
+    patch.phases = phases;
     matched.push('tasks');
   }
 
+  const metReport = {
+    phases: phases.length,
+    fromNotes: phases.filter((p) => p.metSource === 'bpm-note').length,
+    low: phases.filter((p) => p.metSource !== 'bpm-note' && p.metConfidence === 'low').length,
+    needsMet: phases.filter((p) => p.met === '').length,
+    excludedMinutes,
+  };
+
   const filenameNote = opts.filename ? ` from ${opts.filename}` : '';
   const excerpt = body.trim().slice(0, 4000);
-  const unmatched = CHECKLIST.filter((k) => !matched.includes(k));
+  const unmatched = REQUIRED.filter((k) => !matched.includes(k));
+  const optionalMissing = OPTIONAL.filter((k) => !matched.includes(k));
   patch.notes = [
     `Imported${filenameNote}.`,
     unmatched.length ? `Not auto-filled — check/complete manually: ${unmatched.join(', ')}.` : null,
+    ...noteLines,
     '',
     '--- original text ---',
     excerpt,
@@ -333,7 +496,7 @@ export function parseCalendarLog(text, opts = {}) {
     .filter((line) => line !== null)
     .join('\n');
 
-  return { patch, matched, unmatched };
+  return { patch, matched, unmatched, optionalMissing, metReport };
 }
 
 /**
@@ -360,6 +523,10 @@ export function splitDayBlocks(text) {
 export function parseMultiDayLog(text, opts = {}) {
   const blocks = splitDayBlocks(text);
   return blocks.map((block) => {
+    // "STARTING PAY." / "PAY." all-day entries are payroll, not a work log (glossary §6).
+    if (!/^\s*shift\s*:/im.test(block) && /\b(?:starting\s+)?pay\b\.?/i.test(block)) {
+      return { block, patch: null, skipped: 'payroll entry', matched: [], unmatched: [] };
+    }
     const filename = opts.filename;
     const result = parseCalendarLog(block, { filename });
     if (!result.patch.date) {

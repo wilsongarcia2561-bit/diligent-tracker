@@ -12,6 +12,7 @@ import {
   TEF_BASELINE_KCAL,
 } from '../data.js';
 import { MODEL_FORMULAS, MODEL_LABELS, MODEL } from '../engine.js';
+import { ANCHORS, NON_LABOR, SOIL_TIERS } from '../metGlossary.js';
 import { esc } from '../ui.js';
 
 function metRange(min, max) {
@@ -108,6 +109,49 @@ export function render(root) {
         <li>Heat index confirms upper-range MET assignments but does not independently raise the MET value.</li>
         <li>Multi-task days: split into phases by task description and calendar timestamps, assign MET per phase, and weight active kcal by net time per phase.</li>
       </ol>
+    </section>
+
+    <section class="card">
+      <h3>Automatic MET from calendar text <span class="sec-ref">MET glossary</span></h3>
+      <p class="muted">
+        Imported days, and any task you describe on the Daily entry tab, get their MET from the MET glossary rather
+        than by hand. The first rule that applies wins:
+      </p>
+      <ol class="ref-list numbered">
+        <li><strong>A BPM-confirmed revision in the day's NOTE line</strong> ("revised to MET 7.5", "Blended MET 7.12") — the glossary never overrides BPM.</li>
+        <li><strong>A MET you typed by hand</strong> — the glossary's own reading is shown beside it with a <em>Use</em> button.</li>
+        <li><strong>Glossary terms</strong> — soil for digs, then tools and materials; several in one task are averaged, a dingo task splits machine/manual evenly.</li>
+        <li><strong>The spec §5 task table</strong> for work the glossary doesn't cover (mulch, pine straw…), then plain verbs (haul, install, spread).</li>
+        <li><strong>No match</strong> — left blank and flagged, never guessed.</li>
+      </ol>
+      <p class="muted">
+        Feels-like ≥ 88°F picks the <em>upper end</em> of a range instead of the midpoint; it never adds MET on its own, and
+        "under shade" switches that off. Loaded wheelbarrow +0.75, pickaxe outside a dig +0.75, machete on sod +0.5,
+        rush +0.5, steep hill/incline +1.25, glue at the tail −0.25. Results stay inside 3.5–9.0. Each phase shows its
+        reasoning and a confidence tag — <em>low</em> means an unstated soil, a spec/verb fallback, or phrasing that BPM
+        has previously caught as under-described.
+      </p>
+      <div class="grid grid-2">
+        <div>
+          <h4>Soil for digs (§1)</h4>
+          <table class="table compact">
+            <tbody>
+              ${SOIL_TIERS.map((t) => `<tr><td>${esc(t.code)} · ${esc(t.label)}</td><td class="right">${metRange(t.lo, t.hi)}</td></tr>`).join('')}
+            </tbody>
+          </table>
+          <p class="muted small">A dig with no soil named anywhere in the day defaults to MC at low confidence.</p>
+          <h4 style="margin-top:18px">Excluded as non-labor (§6)</h4>
+          <ul class="ref-list">${NON_LABOR.map((n) => `<li>${esc(n.reason)}</li>`).join('')}</ul>
+        </div>
+        <div>
+          <h4>Tools &amp; materials (§2 · §3)</h4>
+          <table class="table compact">
+            <tbody>
+              ${ANCHORS.map((a) => `<tr><td>${esc(a.label)}${a.risk ? ' <span class="est-tag">RISK</span>' : ''}</td><td class="right">${metRange(a.lo, a.hi)}</td></tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </section>
 
     <section class="card">

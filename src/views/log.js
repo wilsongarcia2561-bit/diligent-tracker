@@ -21,10 +21,10 @@ import {
   durationMinutes,
   formatDuration,
   calculateDay,
-  suggestMet,
 } from '../engine.js';
 import { COMPONENTS, trailingAverage } from '../analytics.js';
-import { parseCalendarLog, splitDayBlocks } from '../calendarImport.js';
+import { parseCalendarLog, parseMultiDayLog, splitDayBlocks } from '../calendarImport.js';
+import { classifyTask, daySoil, isShadeDay } from '../metGlossary.js';
 import * as store from '../store.js';
 import { confirmClick, debounce, esc, kcal, num, pct, toast, todayIso } from '../ui.js';
 import { calculatedDays } from './history.js';
@@ -67,6 +67,70 @@ export function loadDate(date) {
 
 export function getDraft() {
   return draft;
+}
+
+/* ---------------------------- automatic MET ---------------------------- */
+
+/** Day-level context the glossary reads: heat, shade, and soil named anywhere in the day. */
+function dayContext() {
+  const text = [draft.notes || '', ...draft.phases.map((p) => p.description || '')].join('\n');
+  return { feelsLikeF: draft.feelsLikeF, shade: isShadeDay(text), daySoil: daySoil(text) };
+}
+
+/**
+ * Re-read a phase's description through the MET glossary. Only touches a
+ * phase whose MET is still automatic (or blank) unless forced — a MET typed
+ * by hand, or one taken from a BPM-confirmed note, is left alone.
+ */
+function applyGlossary(phase, { force = false } = {}) {
+  const manual = phase.met !== '' && phase.met !== null && !phase.metAuto;
+  if (!force && (manual || phase.metSource === 'bpm-note')) return false;
+  const c = classifyTask(phase.description, { ...dayContext(), soilCode: phase.soilManual ? phase.soilCode : '' });
+  if (c.nonLabor) {
+    Object.assign(phase, {
+      met: '', metAuto: true, metSource: 'glossary', metConfidence: 'high',
+      metBasis: `${c.basis}. Add its minutes to Non-work time and remove this phase.`,
+      metNotes: [{ level: 'warn', text: `"${phase.description}" reads as non-labor (${c.nonLabor}) — it shouldn't be a phase; put its minutes under Non-work time.` }],
+    });
+    return true;
+  }
+  Object.assign(phase, {
+    met: c.met, metAuto: true, metSource: c.source, metConfidence: c.confidence, metBasis: c.basis, metNotes: c.notes,
+  });
+  if (c.captureCategory) phase.captureCategory = c.captureCategory;
+  if (!phase.soilManual) phase.soilCode = c.soilCode;
+  return true;
+}
+
+function basisHtml(phase) {
+  if (phase.metSource === 'bpm-note') {
+    return `<span class="tag conf-high">BPM note</span><span class="basis-text">${esc(phase.metBasis)}</span>`;
+  }
+  if (phase.metAuto && phase.metBasis) {
+    const conf = phase.metConfidence || 'medium';
+    return `<span class="tag conf-${conf}">Auto MET · ${conf}</span><span class="basis-text">${esc(phase.metBasis)}</span>`;
+  }
+  if (phase.met !== '' && phase.met !== null && phase.description) {
+    const g = classifyTask(phase.description, dayContext());
+    const differs = g.met !== '' && Math.abs(Number(g.met) - Number(phase.met)) >= 0.05;
+    return `<span class="tag muted-tag">Entered by hand</span>${differs
+      ? `<span class="basis-text">Glossary reads MET ${g.met} (${g.confidence}).</span><button type="button" class="link-btn" data-action="apply-met" data-phase="${phase.id}">Use ${g.met}</button>`
+      : ''}`;
+  }
+  return '<span class="basis-text faint">Describe the work — soil, tools and materials set the MET automatically.</span>';
+}
+
+/** Push glossary results into a phase's inputs without rebuilding the form. */
+function syncPhaseInputs(form, phase) {
+  const set = (field, value) => {
+    const el = form.querySelector(`[data-phase="${phase.id}"][data-field="${field}"]`);
+    if (el && el !== document.activeElement) el.value = value ?? '';
+  };
+  set('met', phase.met);
+  set('captureCategory', phase.captureCategory);
+  set('soilCode', phase.soilCode);
+  const basis = form.querySelector(`[data-basis="${phase.id}"]`);
+  if (basis) basis.innerHTML = basisHtml(phase);
 }
 
 /* ------------------------------- templates ------------------------------- */
@@ -114,7 +178,6 @@ function allocText(result) {
 
 function phaseCard(phase, index, calc) {
   const result = calc.phases.find((p) => p.id === phase.id);
-  const suggestion = suggestMet(phase.description, phase.soilCode);
   const autoLabel = result ? MODEL_LABELS[result.autoModel] : '—';
   const reasons = result && result.kriReasons.length ? result.kriReasons.join(' · ') : 'No KRI trigger — Intermediate applies';
 
@@ -130,15 +193,7 @@ function phaseCard(phase, index, calc) {
       ${field('Site', phaseInput(phase.id, 'site', phase.site, 'placeholder="optional — e.g. Bailey Cove"'))}
     </div>
 
-    ${
-      suggestion
-        ? `<div class="suggestion">
-             <span class="tag">Auto-suggest</span>
-             ${esc(suggestion.label)} · MET ${suggestion.metMin}–${suggestion.metMax}
-             <button type="button" class="link-btn" data-action="apply-met" data-phase="${phase.id}" data-met="${suggestion.met}" data-capture="${suggestion.capture}">Use ${suggestion.met}</button>
-           </div>`
-        : ''
-    }
+    <div class="met-basis" data-basis="${phase.id}">${basisHtml(phase)}</div>
 
     <div class="grid grid-4">
       ${field('Soil class', `<select id="p-${phase.id}-soilCode" data-phase="${phase.id}" data-field="soilCode">${soilOptions(phase.soilCode)}</select>`)}
@@ -267,14 +322,14 @@ Shift: 7:56 AM - 11:51 AM
     <div class="grid grid-4">
       ${field('Break count', input('breakCount', entry.breakCount, 'type="number" min="0" step="1" placeholder="0"'), `${store.getSettings().breakMinutesDefault} min each by default`)}
       ${field('Exact break minutes', input('breakMinutesActual', entry.breakMinutesActual, 'type="number" min="0" step="1" placeholder="auto"'), 'Overrides the estimate')}
-      ${field('Non-work transit (min)', input('transitMinutes', entry.transitMinutes, 'type="number" min="0" step="1" placeholder="0"'), 'Supply runs, equipment drop-off')}
+      ${field('Non-work time (min)', input('transitMinutes', entry.transitMinutes, 'type="number" min="0" step="1" placeholder="0"'), 'Supply runs, wrong-item returns, lectures — excluded from active hours')}
       ${field('Working minutes inside lunch', input('lunchEmbeddedMinutes', entry.lunchEmbeddedMinutes, 'type="number" min="0" step="1" placeholder="0"'), 'Split out embedded tasks; log them as a phase')}
     </div>
     <div class="timing-strip">
       <span>Gross shift <strong>${formatDuration(shiftGross)}</strong></span>
       <span>− eating <strong>${formatDuration(calc.timing.eatingMinutes)}</strong></span>
       <span>− breaks <strong>${formatDuration(calc.timing.breakMinutes)}</strong>${calc.timing.breakEstimated && Number(entry.breakCount) > 0 ? ' <em>est.</em>' : ''}</span>
-      <span>− transit <strong>${formatDuration(calc.timing.transitMinutes)}</strong></span>
+      <span>− non-work <strong>${formatDuration(calc.timing.transitMinutes)}</strong></span>
       <span class="net">= net work <strong>${formatDuration(calc.timing.netWorkMinutes)}</strong></span>
     </div>
   </section>
@@ -363,6 +418,10 @@ function resultsTemplate(calc) {
     : `<div class="mini ${balance < 0 ? 'tone-down' : 'tone-up'}"><span class="mini-label">${balance < 0 ? 'Deficit' : 'Surplus'}</span><span class="mini-val">${kcal(Math.abs(balance))}</span></div>`;
 
   const maxNet = Math.max(1, ...calc.phases.map((p) => p.netMinutes));
+  // Glossary §8: blend by minutes, never by task count.
+  const worked = calc.phases.filter((p) => p.met > 0 && p.netMinutes > 0);
+  const workedMin = worked.reduce((sum, p) => sum + p.netMinutes, 0);
+  const blended = workedMin ? worked.reduce((sum, p) => sum + p.met * p.netMinutes, 0) / workedMin : null;
   const phaseRows = calc.phases.map((p, i) => `
     <li class="phase-row">
       <div class="phase-row-head">
@@ -375,7 +434,7 @@ function resultsTemplate(calc) {
         <span>${p.soilCode ? `${p.soilCode} · ${esc(soilName(p.soilCode))}` : '—'}</span>
         <span>${hm(p.netMinutes)}</span>
         <span class="meter"><span style="width:${((p.netMinutes / maxNet) * 100).toFixed(1)}%"></span></span>
-        <span>MET ${num(p.met, 1)}</span>
+        <span title="${esc(p.metBasis || (p.metAuto ? '' : 'Entered by hand'))}"><span class="conf-dot conf-${p.metSource === 'bpm-note' ? 'high' : p.metAuto ? p.metConfidence || 'medium' : 'manual'}"></span>MET ${num(p.met, 1)}</span>
       </div>
     </li>`).join('');
 
@@ -414,7 +473,7 @@ function resultsTemplate(calc) {
       </div>
 
       <div class="side-head">
-        <h3>Task phases</h3>
+        <h3>Task phases${blended === null ? '' : ` <span class="meta">blended MET ${blended.toFixed(2)}</span>`}</h3>
         ${calc.restDay ? '' : '<button type="button" class="btn ghost sm" data-action="add-phase">+ Add phase</button>'}
       </div>
       ${calc.restDay
@@ -535,28 +594,25 @@ function onFieldEvent(e, form) {
     const phase = draft.phases.find((p) => p.id === phaseId);
     if (!phase) return;
     phase[fieldName] = value;
-    // Auto-fill MET and capture category the first time a description is typed.
-    if (fieldName === 'description' && (phase.met === '' || phase.met === null)) {
-      const s = suggestMet(value, phase.soilCode);
-      if (s) {
-        phase.met = s.met;
-        if (!phase.captureCategory) phase.captureCategory = s.capture;
-        const metInput = form.querySelector(`[data-phase="${phaseId}"][data-field="met"]`);
-        if (metInput) metInput.value = s.met;
-        const capInput = form.querySelector(`[data-phase="${phaseId}"][data-field="captureCategory"]`);
-        if (capInput) capInput.value = phase.captureCategory;
-      }
-    }
-    if (fieldName === 'soilCode' && value) {
-      const soil = SOIL_CLASSES.find((sc) => sc.code === value);
-      if (soil && (phase.met === '' || phase.met === null)) {
-        phase.met = Math.round(((soil.metMin + soil.metMax) / 2) * 10) / 10;
-        const metInput = form.querySelector(`[data-phase="${phaseId}"][data-field="met"]`);
-        if (metInput) metInput.value = phase.met;
+    if (fieldName === 'met') {
+      // A MET typed by hand always wins over the glossary.
+      Object.assign(phase, { metAuto: false, metSource: 'manual', metConfidence: '', metBasis: '', metNotes: [] });
+      const basis = form.querySelector(`[data-basis="${phase.id}"]`);
+      if (basis) basis.innerHTML = basisHtml(phase);
+    } else if (fieldName === 'description' || fieldName === 'soilCode') {
+      if (fieldName === 'soilCode') phase.soilManual = Boolean(value);
+      if (applyGlossary(phase)) syncPhaseInputs(form, phase);
+      else {
+        const basis = form.querySelector(`[data-basis="${phase.id}"]`);
+        if (basis) basis.innerHTML = basisHtml(phase);
       }
     }
   } else {
     draft[fieldName] = value;
+    // Heat, shade or soil named in the notes change what the glossary reads.
+    if (fieldName === 'feelsLikeF' || fieldName === 'notes') {
+      for (const phase of draft.phases) if (applyGlossary(phase)) syncPhaseInputs(form, phase);
+    }
     if (fieldName === 'restDay') {
       markDirty();
       rebuildForm(form);
@@ -578,7 +634,7 @@ function refreshSuggestionsAndHints(form) {
       <span>Gross shift <strong>${formatDuration(durationMinutes(draft.shiftStart, draft.shiftEnd))}</strong></span>
       <span>− eating <strong>${formatDuration(calc.timing.eatingMinutes)}</strong></span>
       <span>− breaks <strong>${formatDuration(calc.timing.breakMinutes)}</strong>${calc.timing.breakEstimated && Number(draft.breakCount) > 0 ? ' <em>est.</em>' : ''}</span>
-      <span>− transit <strong>${formatDuration(calc.timing.transitMinutes)}</strong></span>
+      <span>− non-work <strong>${formatDuration(calc.timing.transitMinutes)}</strong></span>
       <span class="net">= net work <strong>${formatDuration(calc.timing.netWorkMinutes)}</strong></span>`;
   }
 }
@@ -591,17 +647,28 @@ function refreshSuggestionsAndHints(form) {
  * through each day" path. A block with no date at all is skipped and
  * reported rather than guessed at.
  */
-function handleBulkImport(blocks, filename, form) {
-  const savedDates = [];
-  let skipped = 0;
-  const unmatchedByDate = {};
+/** One toast line summarizing what the MET glossary did across imported phases. */
+function metSummary(report) {
+  if (!report.phases) return '';
+  const parts = [`MET set automatically for ${report.phases} phase${report.phases === 1 ? '' : 's'}`];
+  if (report.fromNotes) parts.push(`${report.fromNotes} from BPM-confirmed notes`);
+  if (report.low) parts.push(`${report.low} low-confidence`);
+  if (report.needsMet) parts.push(`${report.needsMet} with no match (enter by hand)`);
+  if (report.excludedMinutes) parts.push(`${report.excludedMinutes} min of non-labor time excluded`);
+  return `${parts.join(' · ')}.`;
+}
 
-  for (const block of blocks) {
-    const { patch, unmatched } = parseCalendarLog(block, { filename });
-    if (!patch.date) {
-      skipped += 1;
+function handleBulkImport(text, filename, form) {
+  const savedDates = [];
+  const skipped = { payroll: 0, undated: 0 };
+  const totals = { phases: 0, fromNotes: 0, low: 0, needsMet: 0, excludedMinutes: 0 };
+
+  for (const result of parseMultiDayLog(text, { filename })) {
+    if (!result.patch) {
+      skipped[result.skipped === 'payroll entry' ? 'payroll' : 'undated'] += 1;
       continue;
     }
+    const { patch, metReport } = result;
     const entry = {
       ...store.newEntry(patch.date),
       ...patch,
@@ -615,23 +682,21 @@ function handleBulkImport(blocks, filename, form) {
     };
     store.saveEntry(entry);
     savedDates.push(patch.date);
-    if (unmatched.length) unmatchedByDate[patch.date] = unmatched;
+    for (const k of Object.keys(totals)) totals[k] += metReport[k] || 0;
   }
 
   savedDates.sort();
-  const daysWithGaps = savedDates.filter((d) => (unmatchedByDate[d] || []).length > 2);
-
   toast(
     savedDates.length
       ? `Imported ${savedDates.length} day${savedDates.length === 1 ? '' : 's'}` +
           `${savedDates.length > 1 ? ` (${savedDates[0]} to ${savedDates.at(-1)})` : ` (${savedDates[0]})`}.` +
-          ` Existing entries for those dates were overwritten.`
+          ' Existing entries for those dates were overwritten.'
       : 'No day blocks had a readable date — nothing was imported.',
   );
-  if (skipped) toast(`${skipped} block(s) had no "Date:" line and were skipped entirely.`, 'warn');
-  if (daysWithGaps.length) {
-    toast(`${daysWithGaps.length} day(s) are missing several fields — check them in History.`, 'warn');
-  }
+  const summary = metSummary(totals);
+  if (summary) toast(summary, totals.low || totals.needsMet ? 'warn' : 'ok');
+  if (skipped.payroll) toast(`Skipped ${skipped.payroll} payroll entr${skipped.payroll === 1 ? 'y' : 'ies'} — not a work log.`);
+  if (skipped.undated) toast(`${skipped.undated} block(s) had no "Date:" line and were skipped entirely.`, 'warn');
 
   if (savedDates.length) {
     loadDate(savedDates.at(-1));
@@ -671,11 +736,11 @@ async function handleImportFile(e, form) {
 
   const blocks = splitDayBlocks(text);
   if (blocks.length > 1) {
-    handleBulkImport(blocks, file.name, form);
+    handleBulkImport(text, file.name, form);
     return;
   }
 
-  const { patch, matched, unmatched } = parseCalendarLog(text, {
+  const { patch, matched, unmatched, metReport } = parseCalendarLog(text, {
     filename: file.name,
     fallbackDate: draft.date,
   });
@@ -702,6 +767,8 @@ async function handleImportFile(e, form) {
       ? `Imported ${draft.date}: ${matched.join(', ')} parsed.`
       : `Imported ${draft.date}, but nothing matched a known pattern — see the format guide and original text in Notes.`,
   );
+  const summary = metSummary(metReport);
+  if (summary) toast(summary, metReport.low || metReport.needsMet ? 'warn' : 'ok');
   if (unmatched.length) toast(`Fill in manually: ${unmatched.join(', ')}.`, 'warn');
 }
 
@@ -723,11 +790,9 @@ function onClick(e, form) {
     markDirty();
     rebuildForm(form);
   } else if (action === 'apply-met') {
-    const id = e.target.dataset.phase;
-    const phase = draft.phases.find((p) => p.id === id);
+    const phase = draft.phases.find((p) => p.id === e.target.dataset.phase);
     if (phase) {
-      phase.met = Number(e.target.dataset.met);
-      if (!phase.captureCategory) phase.captureCategory = e.target.dataset.capture || '';
+      applyGlossary(phase, { force: true });
       markDirty();
       rebuildForm(form);
     }

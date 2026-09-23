@@ -572,6 +572,21 @@ input[type="checkbox"] { accent-color: var(--green); width: 15px; height: 15px; 
 .suggestion { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); margin-bottom: 14px; }
 .tag { font: 600 10px var(--mono); color: var(--green); background: var(--green-soft); padding: 3px 6px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.06em; }
 
+/* Auto-MET reasoning line on each phase: a confidence tag + the glossary's steps. */
+.met-basis { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; margin: -4px 0 14px; font-size: 12px; line-height: 1.5; }
+.met-basis .tag { flex: none; }
+.basis-text { color: var(--dim); font: 400 12px/1.5 var(--mono); }
+.tag.conf-high { color: var(--green); background: var(--green-soft); }
+.tag.conf-medium { color: var(--amber); background: oklch(0.8 0.13 75 / 0.12); }
+.tag.conf-low { color: var(--red-text); background: var(--red-soft); }
+.tag.muted-tag { color: var(--dim); background: rgba(255, 255, 255, 0.06); }
+.conf-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; background: var(--faint); }
+.conf-dot.conf-high { background: var(--green); }
+.conf-dot.conf-medium { background: var(--amber); }
+.conf-dot.conf-low { background: var(--red); }
+.conf-dot.conf-manual { background: var(--dim); }
+.side-head .meta { margin-left: 8px; vertical-align: 2px; }
+
 .callout {
   background: var(--inset); border: 1px solid var(--line-2); border-radius: var(--r-sm);
   padding: 10px 12px; font-size: 12px; color: var(--dim); line-height: 1.55; margin: 10px 0;

@@ -108,6 +108,17 @@ every dated block is saved as its own entry directly — no per-day clicking thr
 lands on History so you can review what came in. A file with no `---` is treated as a single day
 and merges onto whatever's currently open instead of creating a new entry.
 
+**MET is read from the text, not typed.** `src/metGlossary.js` implements the MET glossary
+(`MET_GLOSSARY.md`): soil tier for digs (including soil named in a day's NOTE line), tool and
+material anchors, the heat rule (feels-like ≥ 88°F picks the upper end of a range, never adds
+MET), wheelbarrow / pickaxe / machete / rush / incline deltas, dingo machine-vs-manual splitting,
+and the 3.5–9.0 sanity clamp. Each phase records its reasoning and a confidence level. The
+importer also reads relative times ("Beginning", "after lunch", "end shift"), "Arrived 1:45 … left
+4:23" windows (AM/PM inferred from the shift), job-title bullets ("Patio job"), post-shift lunches,
+and excludes non-labor blocks (wrong-item returns, lectures) from active time. A BPM-confirmed
+revision written in a day's NOTE ("revised to MET 7.5", "Blended MET 7.12") overrides the
+task-based estimate, and a MET typed by hand always wins. Covered by `tests/metGlossary.test.mjs`.
+
 Two correctness details worth knowing about, both found and fixed against real data during
 development:
 - A bulleted `NOTE: ...` line is treated as commentary, not a task — it stays in Notes but isn't

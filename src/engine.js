@@ -483,6 +483,11 @@ function normalizePhase(phase) {
     watchBpm: phase.watchBpm ?? '',
     samsungActiveMinutes: phase.samsungActiveMinutes ?? '',
     metRevisionNote: phase.metRevisionNote || '',
+    metAuto: Boolean(phase.metAuto),
+    metSource: phase.metSource || '',
+    metConfidence: phase.metConfidence || '',
+    metBasis: phase.metBasis || '',
+    metNotes: Array.isArray(phase.metNotes) ? phase.metNotes : [],
   };
 }
 
@@ -677,6 +682,9 @@ export function calculateDay(entry, settings = {}) {
         text: `"${p.description || 'Untitled phase'}": model manually set to ${MODEL_LABELS[p.model]} (auto-selection chose ${MODEL_LABELS[p.autoModel]}).`,
       });
     }
+    // Notes from the MET glossary (risky phrasing, unmatched terms, defaults)
+    // travel with an auto-assigned MET until someone enters one by hand.
+    if (p.metAuto) for (const n of p.metNotes) flags.push({ level: n.level === 'warn' ? 'warn' : 'info', text: n.text });
     if (!p.exactNet && p.grossMinutes === 0 && phases.some((sib) => sib.grossMinutes > 0)) {
       flags.push({
         level: 'info',
