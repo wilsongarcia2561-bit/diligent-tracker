@@ -5,10 +5,7 @@ import { calculateDay } from '../engine.js';
 import * as store from '../store.js';
 import { esc, kcal, num, openTextPanel } from '../ui.js';
 
-function resolveWeight(entry) {
-  if (entry.weightKg !== '' && Number(entry.weightKg) > 0) return entry;
-  return { ...entry, weightKg: store.weightForDate(entry.date) };
-}
+const resolveWeight = (entry) => store.resolveEntry(entry);
 
 export function calculatedEntries() {
   return store

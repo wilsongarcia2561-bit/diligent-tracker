@@ -72,6 +72,20 @@ show the document's figure and the difference in their data-quality panel (a war
 §8 standing problems it can see in calendar text: a `"half."` title, a start_time inside the
 logged lunch or before 4 AM, an empty `1.)` task item, and a downward BPM revision.
 
+**Heart-rate exports (§4, §5).** *Import from file* also takes a Samsung Health heart-rate
+export as `.html` or `.pdf` (any file with readings and no `Shift:` line). Readings are stored by
+date, apart from day entries, so they survive a calendar re-import and every check stays live as
+shift or phase times change. Each logged day's work window (shift minus lunch), and each phase
+with a start/end, is summarized as a time-weighted median — dense sampling during a tagged
+workout doesn't dominate it — then corrected (+30/+35), turned into HRR = (corrected − 49) / 152,
+mapped to the MET band and compared with the minute-blended MET. A disagreement in either
+direction is a warning with a one-click revision (to the band midpoint, in half-MET steps) that
+records which way it went. After import, a copyable report lists every day's verdict.
+
+The parser works line by line (a table row or line with a clock time and a heart rate, dated by
+the nearest date above it), so it has only been checked against synthetic exports in the
+layouts Samsung is likely to use — `tests/fixtures/sample-hr-export.html` — not a real one yet.
+
 **TEF (§2).** 210 kcal standard. If a daily intake is logged and differs from the 2,000 kcal
 baseline by more than 15%, TEF is re-suggested at 10% of actual intake. Overridable.
 

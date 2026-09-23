@@ -45,7 +45,19 @@ export async function extractPdfText(arrayBuffer) {
   for (let i = 1; i <= doc.numPages; i += 1) {
     const page = await doc.getPage(i);
     const content = await page.getTextContent();
-    pages.push(content.items.map((item) => item.str).join(' '));
+    // Keep the PDF's line structure: a table row or a "1:05 PM 118 bpm" line
+    // must stay one line for the heart-rate and calendar parsers to read it.
+    let text = '';
+    let lastY = null;
+    for (const item of content.items) {
+      const y = item.transform ? Math.round(item.transform[5]) : null;
+      if (lastY !== null && y !== null && Math.abs(y - lastY) > 2 && !text.endsWith('\n')) text += '\n';
+      else if (text && !text.endsWith('\n') && !text.endsWith(' ')) text += ' ';
+      text += item.str;
+      if (item.hasEOL) text += '\n';
+      if (y !== null) lastY = y;
+    }
+    pages.push(text);
   }
   return pages.join('\n\n');
 }

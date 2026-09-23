@@ -28,6 +28,9 @@ function emptyState() {
     settings: { ...DEFAULT_SETTINGS },
     entries: {},
     weightLog: SEED_WEIGHT_LOG.map((w) => ({ ...w })),
+    // Heart-rate readings by date, kept apart from entries so re-importing a
+    // calendar log never throws them away.
+    heartRate: {},
   };
 }
 
@@ -189,6 +192,28 @@ export function weightForDate(date) {
   if (applicable.length) return applicable.at(-1).kg;
   const all = listWeights();
   return all.length ? all[0].kg : state.settings.weightKg;
+}
+
+/* ------------------------------ heart rate ----------------------------- */
+
+/** Store readings per date; a date present in the new export replaces what was there. */
+export function saveHeartRate(byDate) {
+  state.heartRate = { ...(state.heartRate || {}), ...byDate };
+  persist();
+}
+
+export function heartRateForDate(date) {
+  return (state.heartRate && state.heartRate[date]) || [];
+}
+
+export function heartRateDates() {
+  return Object.keys(state.heartRate || {}).sort();
+}
+
+/** An entry with everything the engine needs resolved: weight in effect and heart-rate readings. */
+export function resolveEntry(entry) {
+  const weighed = entry.weightKg !== '' && Number(entry.weightKg) > 0 ? entry : { ...entry, weightKg: weightForDate(entry.date) };
+  return { ...weighed, hrSamples: heartRateForDate(entry.date) };
 }
 
 /* ------------------------------ import/export -------------------------- */

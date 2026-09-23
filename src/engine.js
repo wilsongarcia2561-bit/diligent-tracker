@@ -30,6 +30,7 @@ import {
   TEF_BASELINE_INTAKE_KCAL,
   TEF_BASELINE_KCAL,
 } from './data.js';
+import { clockMinutes, windowStats } from './heartRate.js';
 
 export const MODEL = {
   RAW: 'raw',
@@ -498,6 +499,43 @@ export function walkingKcal({ steps, kg }) {
   return { hours, kcal: activeKcal({ met: NON_WORK_DAY.walkingMet, model: MODEL.INTERMEDIATE, kg, hours }) };
 }
 
+/** Midpoint of an HRR-implied MET band, rounded to the half-MET steps the dataset uses. */
+export function hrSuggestedMet(check) {
+  if (!check || !check.implied) return null;
+  const hi = check.impliedMax ? check.impliedMax.metMax : check.implied.metMax;
+  return Math.round(((check.implied.metMin + hi) / 2) * 2) / 2;
+}
+
+/**
+ * §4/§5 — cross-check against an imported heart-rate export. The day check
+ * compares the work window (shift minus lunch) against the minute-blended
+ * MET; each phase with a start/end is checked against its own window.
+ */
+function heartRateCheck(entry, phases, blendedMet, restingHr, maxHr) {
+  const readings = Array.isArray(entry.hrSamples) ? entry.hrSamples : [];
+  if (!readings.length) return null;
+  const start = clockMinutes(entry.shiftStart);
+  let end = clockMinutes(entry.shiftEnd);
+  if (start !== null && end !== null && end <= start) end += 1440;
+  const lunch = [[clockMinutes(entry.lunchStart), clockMinutes(entry.lunchEnd)]];
+  const verify = (stats, met) => {
+    if (!stats || stats.n < 3) return null;
+    const check = validateWithBpm({ watchBpm: stats.median, taskMet: met || null, resting: restingHr, max: maxHr });
+    return check && { ...check, stats, suggestedMet: hrSuggestedMet(check) };
+  };
+  const dayStats = windowStats(readings, start, end, lunch);
+  const byPhase = {};
+  for (const p of phases) {
+    const s = clockMinutes(p.start);
+    let e = clockMinutes(p.end);
+    if (s === null || e === null) continue;
+    if (e <= s) e += 1440;
+    const check = verify(windowStats(readings, s, e, lunch), p.met);
+    if (check) byPhase[p.id] = check;
+  }
+  return { readings: readings.length, dayStats, day: verify(dayStats, blendedMet), byPhase };
+}
+
 /** §6 — the document-of-record figure for a date, if DILIGENT IV lists one. */
 export function datasetFigure(date) {
   return DATASET_IV.find((d) => d.date === date) || null;
@@ -561,6 +599,15 @@ export function calculateDay(entry, settings = {}) {
   // §7 — a non-work day's only activity line is walking.
   const walking = restDay ? walkingKcal({ steps: entry.steps, kg }) : null;
   const activeTotal = walking ? walking.kcal : phases.reduce((sum, p) => sum + p.kcal, 0);
+
+  const workedPhases = phases.filter((p) => p.met > 0 && p.netMinutes > 0);
+  const workedMinutes = workedPhases.reduce((s, p) => s + p.netMinutes, 0);
+  const blendedMet = workedMinutes ? workedPhases.reduce((s, p) => s + p.met * p.netMinutes, 0) / workedMinutes : null;
+  const hr = restDay ? null : heartRateCheck(entry, phases, blendedMet, restingHr, maxHr);
+  if (hr) {
+    // A hand-typed watch BPM stays the phase's cross-check; otherwise the export's.
+    for (const p of phases) if (!p.bpm && hr.byPhase[p.id]) p.bpm = { ...hr.byPhase[p.id], fromExport: true };
+  }
   const maxMet = phases.reduce((max, p) => Math.max(max, Number(p.met) || 0), 0);
 
   // NEAT (§9)
@@ -666,7 +713,7 @@ export function calculateDay(entry, settings = {}) {
       text: 'No feels-like temperature logged, so heat could not confirm upper-range MET assignments for this day.',
     });
   }
-  if (!restDay && phases.length > 0 && phases.every((p) => p.watchBpm === '' || p.watchBpm === null)) {
+  if (!restDay && phases.length > 0 && !hr && phases.every((p) => p.watchBpm === '' || p.watchBpm === null)) {
     flags.push({ level: 'info', text: 'No BPM data logged — MET assignments are unvalidated for this day.' });
   }
   for (const p of phases) {
@@ -685,7 +732,9 @@ export function calculateDay(entry, settings = {}) {
     if (p.bpm && (p.bpm.verdict === 'revise-up' || p.bpm.verdict === 'revise-down')) {
       flags.push({
         level: 'warn',
-        text: `"${p.description || 'Untitled phase'}": ${p.bpm.message}`,
+        text: p.bpm.fromExport
+          ? `"${p.description || 'Untitled phase'}" (${p.start}–${p.end}): heart-rate export median ${p.bpm.stats.median} bpm over ${p.bpm.stats.n} readings → ${p.bpm.message}`
+          : `"${p.description || 'Untitled phase'}": ${p.bpm.message}`,
       });
     }
     if (p.restatedFromKri) {
@@ -702,6 +751,27 @@ export function calculateDay(entry, settings = {}) {
         level: 'info',
         text: `"${p.description || 'Untitled phase'}" has no start/end time — given an average-sized share of net work time from its timed sibling phases. Add exact start/end or exact net minutes for a tighter split.`,
       });
+    }
+  }
+
+  // §4/§5 — the day's work window against the minute-blended MET.
+  if (hr) {
+    const d = hr.day;
+    const s = hr.dayStats;
+    if (!s || s.n === 0) {
+      flags.push({ level: 'info', text: `The heart-rate export has ${hr.readings} readings for this date, but none inside the shift window — check the shift times.` });
+    } else if (!d) {
+      flags.push({ level: 'info', text: `Only ${s.n} heart-rate reading${s.n === 1 ? '' : 's'} inside the shift window — too few to cross-check MET.` });
+    } else {
+      const chain = `median ${s.median} bpm over ${s.n} readings → corrected ${d.correctedBpm}${d.correctedBpmMax !== d.correctedBpm ? `–${d.correctedBpmMax}` : ''} → HRR ${Math.round(d.hrr * 100)}%`;
+      const band = d.implied ? ` → MET ${d.implied.metMin}–${(d.impliedMax || d.implied).metMax}` : '';
+      if (d.verdict === 'no-reference') {
+        flags.push({ level: 'warn', text: `Heart rate stayed near resting across the shift (${chain}, below the 35% table floor). Check the shift times, or whether the watch was worn.` });
+      } else if (d.verdict === 'validates') {
+        flags.push({ level: 'info', text: `Heart-rate export confirms the day: ${chain}${band}, and the blended MET is ${blendedMet.toFixed(2)}.` });
+      } else if (d.verdict === 'revise-up' || d.verdict === 'revise-down') {
+        flags.push({ level: 'warn', text: `Heart-rate export disagrees (${d.verdict === 'revise-up' ? 'higher' : 'lower'}): ${chain}${band}, but the blended MET is ${blendedMet.toFixed(2)}. Revise ${d.verdict === 'revise-up' ? 'up' : 'down'} toward ~${d.suggestedMet} and state the revision.` });
+      }
     }
   }
 
@@ -724,6 +794,8 @@ export function calculateDay(entry, settings = {}) {
     date: entry.date,
     restDay,
     walking,
+    blendedMet,
+    hr,
     dataset: doc,
     weightKg: kg,
     feelsLikeF,
