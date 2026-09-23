@@ -26,7 +26,7 @@ import { COMPONENTS, trailingAverage } from '../analytics.js';
 import { parseCalendarLog, parseMultiDayLog, splitDayBlocks } from '../calendarImport.js';
 import { classifyTask, daySoil, isShadeDay } from '../metGlossary.js';
 import * as store from '../store.js';
-import { confirmClick, debounce, esc, kcal, num, pct, toast, todayIso } from '../ui.js';
+import { confirmClick, esc, kcal, num, pct, toast, todayIso } from '../ui.js';
 import { calculatedDays } from './history.js';
 
 let draft = null;
@@ -42,20 +42,32 @@ function setSaveState(state) {
   badge.textContent = state === 'saved' ? '● Saved' : '● Saving';
 }
 
-const save = debounce(() => {
-  if (!draft || !draft.date) return;
+let saveTimer = null;
+
+/**
+ * Writes any pending edit now. Saving is debounced 500ms behind typing, so
+ * anything that swaps the open day or leaves this screen must flush first —
+ * otherwise the reload overwrites the unsaved edit, or the late timer saves
+ * it onto whichever day was opened next.
+ */
+export function flushSave() {
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  if (!dirty || !draft || !draft.date) return;
   store.saveEntry(draft);
   dirty = false;
   setSaveState('saved');
-}, 500);
+}
 
 function markDirty() {
   dirty = true;
   setSaveState('pending');
-  save();
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(flushSave, 500);
 }
 
 export function loadDate(date) {
+  flushSave();
   const existing = store.getEntry(date);
   draft = existing
     ? JSON.parse(JSON.stringify(existing))
@@ -551,7 +563,13 @@ export function render(root) {
 
   form.addEventListener('submit', (e) => e.preventDefault());
   form.addEventListener('input', (e) => onFieldEvent(e, form));
-  form.addEventListener('change', (e) => onFieldEvent(e, form));
+  // Typed fields were already handled keystroke by keystroke on `input`. Their
+  // blur-time `change` would re-render the results panel mid-click, swallowing
+  // a click on "+ Add phase" or a disclosure made right after typing.
+  const TYPED = 'input:not([type]), input[type="text"], input[type="number"], input[type="time"], textarea';
+  form.addEventListener('change', (e) => {
+    if (!e.target.matches(TYPED)) onFieldEvent(e, form);
+  });
   form.addEventListener('click', (e) => onClick(e, form));
   // "+ Add phase" in the result summary lives outside the form.
   root.querySelector('#results').addEventListener('click', (e) => {
@@ -579,7 +597,6 @@ function onFieldEvent(e, form) {
     return;
   }
   if (target.id === 'entry-date') {
-    if (dirty) store.saveEntry(draft);
     loadDate(target.value);
     rebuildForm(form);
     return;
@@ -734,6 +751,9 @@ async function handleImportFile(e, form) {
     return;
   }
 
+  // Land any unsaved edit before imported days are written, so a pending
+  // timer can't overwrite an imported date with the older in-progress draft.
+  flushSave();
   const blocks = splitDayBlocks(text);
   if (blocks.length > 1) {
     handleBulkImport(text, file.name, form);
@@ -746,7 +766,6 @@ async function handleImportFile(e, form) {
   });
 
   if (patch.date && patch.date !== draft.date) {
-    if (dirty) store.saveEntry(draft);
     loadDate(patch.date);
   }
 

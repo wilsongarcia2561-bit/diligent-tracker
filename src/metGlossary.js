@@ -45,6 +45,20 @@ export const SOIL_TIERS = [
 
 const MC_DEFAULT = SOIL_TIERS.find((t) => t.code === 'MC');
 
+/**
+ * The band a soil class picked from the dropdown stands for. Several tiers
+ * share a code (HCP covers "dry hard clay" and "hard clay + pickaxe"), so a
+ * hand-picked code maps to its general band rather than whichever tier
+ * happens to be listed first. SRW is a block-carry band, not a soil tier.
+ */
+const SOIL_BY_CODE = {
+  SC: SOIL_TIERS.find((t) => t.label === 'Soft / cultivated'),
+  MC: MC_DEFAULT,
+  HC: SOIL_TIERS.find((t) => t.label === 'Hard clay + gravel'),
+  HCP: SOIL_TIERS.find((t) => t.label === 'Hard clay + pickaxe'),
+  SRW: { code: 'SRW', label: 'Segmental retaining wall', lo: 9.0, hi: 9.0, rank: 100 },
+};
+
 export function classifySoil(text) {
   let best = null;
   for (const tier of SOIL_TIERS) {
@@ -158,7 +172,7 @@ const rangeText = (lo, hi) => (lo === hi ? fmt(lo) : `${fmt(lo)}–${fmt(hi)}`);
 export function classifyTask(text, ctx = {}) {
   const clause = String(text || '').trim();
   const notes = [];
-  if (!clause) return { met: '', confidence: 'low', basis: '', notes, soilCode: '', captureCategory: '', packUp: false };
+  if (!clause && !ctx.soilCode) return { met: '', confidence: 'low', basis: '', notes, soilCode: '', captureCategory: '', packUp: false };
 
   const nonLabor = nonLaborReason(clause);
   if (nonLabor) {
@@ -178,9 +192,11 @@ export function classifyTask(text, ctx = {}) {
 
   // Dig activity — §1 soil sets the MET. Parenthetical soil descriptions feed
   // the soil tier but aren't treated as separate activities (§1 vs §3).
-  const digContext = DIG.test(clause) || PICKAXE.test(clause);
+  // A soil class picked by hand says the phase is ground work even when the
+  // description doesn't use a dig verb (or is still blank).
+  const digContext = DIG.test(clause) || PICKAXE.test(clause) || Boolean(ctx.soilCode);
   if (digContext) {
-    const explicit = ctx.soilCode ? SOIL_TIERS.find((t) => t.code === ctx.soilCode) : null;
+    const explicit = ctx.soilCode ? SOIL_BY_CODE[ctx.soilCode] || null : null;
     let tier = explicit || classifySoil(clause);
     let source = explicit ? 'soil class selected' : 'clause';
     if (!tier && ctx.daySoil) {

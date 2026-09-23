@@ -434,3 +434,19 @@ Breaks: 6
     assert.equal(results[1].patch.date, '2026-09-21');
   });
 });
+
+describe('job-title bullets (regression)', () => {
+  it('keeps a real task that merely ends in "day" as a phase', () => {
+    const { patch } = parseCalendarLog('Date: 2026-09-21\nShift: 8:00 AM - 4:00 PM\n• Mow and edge lawn all day\n• Water sod');
+    assert.equal(patch.phases.length, 2);
+    assert.doesNotMatch(patch.notes, /Job:/);
+  });
+
+  it('still reads short titles like "Sod day" and any "…job" as the job name', () => {
+    const a = parseCalendarLog('Date: 2026-09-16\n• Sod day\n• Implement Bermuda sod').patch;
+    assert.equal(a.phases.length, 1);
+    assert.match(a.notes, /Job: Sod day/);
+    const b = parseCalendarLog('Date: 2026-08-25\n• Flexstone patio from foundation on former thick concrete slab job\n• Bring sand, mix with cement').patch;
+    assert.equal(b.phases.length, 1);
+  });
+});

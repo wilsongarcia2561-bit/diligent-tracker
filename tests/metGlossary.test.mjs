@@ -158,3 +158,18 @@ describe('BPM-confirmed revisions in NOTE lines', () => {
     assert.equal(bpmRevisionFromNotes('NOTE: Shift start corrected to 8:00 AM based on HR data'), null);
   });
 });
+
+describe('hand-picked soil class (regression)', () => {
+  it('scores a phase from the chosen soil even with no dig verb or no description', () => {
+    close(classifyTask('misc work in the back', { feelsLikeF: 80, soilCode: 'HC' }).met, 7.25);
+    close(classifyTask('', { feelsLikeF: 80, soilCode: 'SC' }).met, 4.75);
+  });
+
+  it('maps each code to its general band, not the first tier that shares the code', () => {
+    // HCP is the 8.0–8.5 pickaxe band (midpoint 8.25), not "dry hard clay" (flat 8.0).
+    close(classifyTask('Dig footing', { feelsLikeF: 80, soilCode: 'HCP' }).met, 8.25);
+    // HC is hard clay + gravel (7.0–7.5), not "wet clay" (flat 7.5).
+    close(classifyTask('Dig footing', { feelsLikeF: 80, soilCode: 'HC' }).met, 7.25);
+    close(classifyTask('Dig footing', { feelsLikeF: 80, soilCode: 'SRW' }).met, 9.0);
+  });
+});

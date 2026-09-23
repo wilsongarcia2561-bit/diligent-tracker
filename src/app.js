@@ -103,6 +103,8 @@ function mount() {
 }
 
 function go(tab) {
+  // Every other screen reads from storage, so land any pending edit first.
+  logView.flushSave();
   current = tab;
   if (location.hash !== `#${tab}`) history.replaceState(null, '', `#${tab}`);
   document.querySelectorAll('[data-tab]').forEach((btn) => {
@@ -162,6 +164,12 @@ function init() {
   renderNav();
   const fromHash = location.hash.replace('#', '');
   go(importedDate ? 'log' : TABS.some((t) => t.id === fromHash) ? fromHash : 'log');
+
+  // Closing or backgrounding the page inside the save debounce would drop the last edit.
+  window.addEventListener('pagehide', () => logView.flushSave());
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') logView.flushSave();
+  });
 
   window.addEventListener('hashchange', () => {
     const tab = location.hash.replace('#', '');

@@ -293,8 +293,12 @@ function parseTasks(text, ctx) {
     if (!raw || /^note\b[:\s]/i.test(raw)) continue;
     bullets.push(raw);
   }
+  // A title names the job ("Patio job", "Sod day") — a longer bullet that just
+  // happens to end in "day" ("Mow and edge lawn all day") is real work.
   let header = '';
-  if (bullets.length > 1 && /\b(?:job|day)\s*[.:]?$/i.test(bullets[0])) header = bullets.shift();
+  const first = bullets[0] || '';
+  const isTitle = /\bjob\s*[.:]?$/i.test(first) || (/\bday\s*[.:]?$/i.test(first) && first.split(/\s+/).length <= 3);
+  if (bullets.length > 1 && isTitle) header = bullets.shift();
 
   const blocks = bullets.map((raw) => {
     let description = raw;

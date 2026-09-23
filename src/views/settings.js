@@ -4,7 +4,18 @@ import { BMR_KCAL, DEFAULT_BREAK_MINUTES, MAX_HR, RESTING_HR } from '../data.js'
 import * as store from '../store.js';
 import { confirmClick, esc, kgToLb, lbToKg, num, openTextPanel, toast, todayIso } from '../ui.js';
 
+/**
+ * Listeners attach once, here; redraws after an edit only replace markup.
+ * (Re-running render() used to stack another set of handlers on the same
+ * root each time, so one click ran every stacked handler — a single click on
+ * "Erase all data" could arm and confirm itself.)
+ */
 export function render(root, { onChange }) {
+  draw(root);
+  attach(root, onChange);
+}
+
+function draw(root) {
   const s = store.getSettings();
   const weights = store.listWeights().slice().reverse();
 
@@ -88,7 +99,9 @@ export function render(root, { onChange }) {
       </ul>
     </section>
   `;
+}
 
+function attach(root, onChange) {
   root.addEventListener('input', (e) => {
     const key = e.target.dataset.setting;
     if (key) {
@@ -115,14 +128,14 @@ export function render(root, { onChange }) {
       }
       store.upsertWeight({ date, kg: Math.round(kg * 10) / 10, note: '' });
       toast('Weight logged');
-      render(root, { onChange });
+      draw(root);
       onChange?.();
       return;
     }
 
     if (action === 'del-weight') {
       store.deleteWeight(e.target.dataset.date);
-      render(root, { onChange });
+      draw(root);
       onChange?.();
     } else if (action === 'export') {
       openTextPanel({
@@ -136,19 +149,22 @@ export function render(root, { onChange }) {
       if (confirmClick(e.target, 'Erase everything? Click again')) {
         store.clearAll();
         toast('All data erased', 'warn');
-        render(root, { onChange });
+        draw(root);
         onChange?.();
       }
     }
   });
 
-  root.querySelector('#import-file').addEventListener('change', async (e) => {
+  // Delegated: the file input is recreated by every draw().
+  root.addEventListener('change', async (e) => {
+    if (e.target.id !== 'import-file') return;
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
     try {
       store.importJson(await file.text());
       toast('Backup imported');
-      render(root, { onChange });
+      draw(root);
       onChange?.();
     } catch (err) {
       toast(err.message || 'Could not read that file.', 'warn');

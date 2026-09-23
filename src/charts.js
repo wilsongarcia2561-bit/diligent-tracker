@@ -46,7 +46,7 @@ export function niceScale(min, max, ticks = 4) {
   return { lo: Math.floor(min / step) * step, hi: Math.ceil(max / step) * step, step };
 }
 
-/** Redraw `draw` whenever `host` changes width. Returns nothing; observers die with the node. */
+/** Redraw `draw` whenever `host` changes width. */
 export function observeWidth(host, draw) {
   let last = 0;
   const run = () => {
@@ -57,7 +57,11 @@ export function observeWidth(host, draw) {
     }
   };
   run();
-  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(run).observe(host);
+  if (typeof ResizeObserver === 'undefined') return;
+  // Views are replaced wholesale on every tab/range change; drop the observer
+  // once its chart leaves the page so old charts don't pile up in memory.
+  const ro = new ResizeObserver(() => (host.isConnected ? run() : ro.disconnect()));
+  ro.observe(host);
 }
 
 /**
