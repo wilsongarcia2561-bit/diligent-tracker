@@ -132,6 +132,7 @@ export function newEntry(date) {
     steps: '',
     notes: '',
     importFlags: [],
+    nonLaborWindows: [],
     phases: [newPhase()],
     updatedAt: null,
   };

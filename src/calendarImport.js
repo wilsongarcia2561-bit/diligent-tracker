@@ -430,6 +430,7 @@ export function parseCalendarLog(text, opts = {}) {
   if (header) noteLines.push(`Job: ${header}`);
 
   const phases = [];
+  const nonLaborWindows = [];
   let excludedMinutes = 0;
   for (const b of blocks) {
     const c = classifyTask(b.description, dayCtx);
@@ -439,6 +440,8 @@ export function parseCalendarLog(text, opts = {}) {
         noteLines.push(`Non-labor block "${b.description}" (${c.nonLabor}) has no stated duration — enter it under Non-work time.`);
       } else {
         excludedMinutes += minutes;
+        // Keep the clock window too, so heart-rate checks can leave it out (§8.6).
+        if (b.start && b.end) nonLaborWindows.push({ start: b.start, end: b.end, reason: c.nonLabor });
         noteLines.push(`Excluded ${minutes} min of non-labor time: "${b.description}" (${c.nonLabor}, glossary §6).`);
       }
       continue;
@@ -461,6 +464,7 @@ export function parseCalendarLog(text, opts = {}) {
     });
   }
   if (excludedMinutes) patch.transitMinutes = excludedMinutes;
+  if (nonLaborWindows.length) patch.nonLaborWindows = nonLaborWindows;
 
   const importFlags = [];
   const revision = bpmRevisionFromNotes(body);

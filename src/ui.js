@@ -162,13 +162,16 @@ export function reveal(root, { skip = '' } = {}) {
   if (!root) return;
   const targets = [...root.querySelectorAll(REVEAL_TARGETS)].filter((el) => !(skip && el.closest(skip)));
   if (reducedMotion() || typeof IntersectionObserver === 'undefined') return;
-  revealObserver ||= new IntersectionObserver((entries) => {
+  // Only one screen is ever on the page: whatever the last call was watching
+  // has been replaced, so let go of it rather than holding detached nodes.
+  revealObserver?.disconnect();
+  revealObserver = new IntersectionObserver((entries, observer) => {
     const incoming = entries.filter((e) => e.isIntersecting).map((e) => e.target);
     incoming.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
     incoming.forEach((el, i) => {
       el.style.transitionDelay = `${Math.min(i * 55, 440)}ms`;
       el.classList.add('in');
-      revealObserver.unobserve(el);
+      observer.unobserve(el);
       // Clear the delay once it has played so later hovers/transitions aren't slowed.
       setTimeout(() => { el.style.transitionDelay = ''; }, 1200);
     });

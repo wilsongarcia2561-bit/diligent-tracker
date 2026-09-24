@@ -1007,6 +1007,7 @@ async function handleImportFile(e, form) {
     draft.phases = patch.phases.map((p) => ({ ...store.newPhase(), ...p }));
   }
   draft.importFlags = patch.importFlags || [];
+  draft.nonLaborWindows = patch.nonLaborWindows || [];
   draft.notes = draft.notes ? `${patch.notes}\n\n--- previous notes ---\n${draft.notes}` : patch.notes;
 
   markDirty();

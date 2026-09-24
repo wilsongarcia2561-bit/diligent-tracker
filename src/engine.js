@@ -536,7 +536,12 @@ function heartRateCheck(entry, phases, blendedMet, restingHr, maxHr) {
   const start = clockMinutes(entry.shiftStart);
   let end = clockMinutes(entry.shiftEnd);
   if (start !== null && end !== null && end <= start) end += 1440;
-  const lunch = [[clockMinutes(entry.lunchStart), clockMinutes(entry.lunchEnd)]];
+  // Lunch and documented non-labor blocks (a lecture on a hybrid day) are
+  // not work — averaging across them would drag the work window toward rest.
+  const lunch = [
+    [clockMinutes(entry.lunchStart), clockMinutes(entry.lunchEnd)],
+    ...(Array.isArray(entry.nonLaborWindows) ? entry.nonLaborWindows : []).map((w) => [clockMinutes(w.start), clockMinutes(w.end)]),
+  ];
   const verify = (stats, met) => {
     if (!stats || stats.n < 3) return null;
     const check = validateWithBpm({ watchBpm: stats.median, taskMet: met || null, resting: restingHr, max: maxHr });

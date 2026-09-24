@@ -476,3 +476,11 @@ describe('DILIGENT IV §8 data-quality flags from calendar text', () => {
     assert.ok(patch.importFlags.some((f) => f.level === 'warn' && /Downward BPM revision/.test(f.text)));
   });
 });
+
+describe('non-labor windows', () => {
+  it('keeps the clock window of a timed non-labor block for heart-rate checks', () => {
+    const { patch } = parseCalendarLog('Date: 2026-09-02\nShift: 7:25 AM - 4:09 PM\n(Lunch break 12:22 - 12:59)\n\n• (Beginning - 8:49) Remove brick patio by shovel, haul to trailer\n• (8:49 - after lunch) Uni lectures — NOT active labor, sedentary block\n• (Post lunch - end shift) Clean up backyard, hauling debris to trailer');
+    assert.equal(patch.nonLaborWindows.length, 1);
+    assert.equal(patch.nonLaborWindows[0].start, '08:49');
+  });
+});

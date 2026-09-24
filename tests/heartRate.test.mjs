@@ -107,3 +107,23 @@ describe('MET cross-check against the export', () => {
     assert.ok(!calc.flags.some((f) => /No BPM data logged/.test(f.text)));
   });
 });
+
+describe('hybrid work/uni days (§8.6)', () => {
+  it('leaves a documented lecture block out of the work-window heart rate', () => {
+    const readings = [];
+    for (let t = 445; t < 529; t += 10) readings.push({ t, bpm: 130 }); // brick patio 7:25–8:49
+    for (let t = 529; t < 742; t += 10) readings.push({ t, bpm: 72 }); // lecture 8:49–12:22
+    for (let t = 779; t < 840; t += 10) readings.push({ t, bpm: 125 }); // haul 12:59–14:00
+    const day = {
+      date: '2026-09-02', shiftStart: '07:25', shiftEnd: '14:00', lunchStart: '12:22', lunchEnd: '12:59', weightKg: 57.6,
+      transitMinutes: 213,
+      phases: [{ id: 'a', description: 'Remove brick patio', met: 6.5, start: '07:25', end: '08:49' }, { id: 'b', description: 'Haul debris', met: 6.5, start: '12:59', end: '14:00' }],
+      hrSamples: readings,
+    };
+    const without = calculateDay(day, SETTINGS);
+    assert.ok(without.hr.dayStats.median < 80, 'sanity: the lecture dominates when it is not excluded');
+    const withWindow = calculateDay({ ...day, nonLaborWindows: [{ start: '08:49', end: '12:22', reason: 'lecture' }] }, SETTINGS);
+    assert.ok(withWindow.hr.dayStats.median >= 125, `median ${withWindow.hr.dayStats.median}`);
+    assert.equal(withWindow.hr.dayStats.n, 9 + 7);
+  });
+});
