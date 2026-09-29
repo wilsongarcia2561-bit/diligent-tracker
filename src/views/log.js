@@ -29,7 +29,7 @@ import { parseCalendarLog, parseMultiDayLog, splitDayBlocks } from '../calendarI
 import { classifyTask, daySoil, isShadeDay } from '../metGlossary.js';
 import { groupByDate, htmlToText, parseHeartRateText } from '../heartRate.js';
 import * as store from '../store.js';
-import { confirmClick, esc, kcal, num, openTextPanel, pct, toast, todayIso } from '../ui.js';
+import { confirmClick, esc, kcal, num, openPastePanel, openTextPanel, pct, toast, todayIso } from '../ui.js';
 import { calculatedDays } from './history.js';
 
 let draft = null;
@@ -78,6 +78,28 @@ export function loadDate(date) {
   if (!draft.phases || draft.phases.length === 0) draft.phases = [store.newPhase()];
   dirty = false;
   trailing = trailingAverage(calculatedDays(), date);
+}
+
+/**
+ * Another device changed something. Reload the open day when that is safe;
+ * never rebuild the form under someone who is typing or has an unsaved edit.
+ */
+export function onRemoteChange(keys) {
+  if (!draft) return;
+  const mine = keys.some((k) => k === `e:${draft.date}` || k === `h:${draft.date}` || k === 'w' || k === 's');
+  const form = document.getElementById('entry-form');
+  if (!form) return;
+  if (!mine) {
+    refreshResults();
+    return;
+  }
+  const editing = dirty || (document.activeElement && form.contains(document.activeElement) && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName));
+  if (editing) {
+    toast(`${draft.date} was also changed on another device — finish here and it will be overwritten by this version, or reopen the day to see theirs.`, 'warn');
+    return;
+  }
+  loadDate(draft.date);
+  rebuildForm(form);
 }
 
 export function getDraft() {
@@ -290,8 +312,9 @@ function formTemplate(entry, calc) {
         <input type="date" id="entry-date" value="${esc(entry.date)}">
       </label>
       <label class="check"><input type="checkbox" id="f-restDay" data-field="restDay" ${entry.restDay ? 'checked' : ''}> Non-work day</label>
-      <button type="button" class="btn ghost" data-action="import-file">Import from file</button>
-      <input type="file" id="import-file-input" accept=".md,.markdown,.txt,.pdf,.html,.htm" hidden>
+      <label class="btn ghost" for="import-file-input">Import from file</label>
+      <input type="file" id="import-file-input" class="pick-input">
+      <button type="button" class="btn ghost" data-action="import-paste">Paste text</button>
       <button type="button" class="btn danger" data-action="delete-entry">Delete day</button>
     </div>
   </div>
@@ -838,12 +861,20 @@ function metSummary(report) {
 
 function handleBulkImport(text, filename, form) {
   const savedDates = [];
+  const seen = new Map();
+  const duplicates = [];
+  const undated = [];
   const skipped = { payroll: 0, undated: 0 };
   const totals = { phases: 0, fromNotes: 0, low: 0, needsMet: 0, excludedMinutes: 0 };
+  const results = parseMultiDayLog(text, { filename });
 
-  for (const result of parseMultiDayLog(text, { filename })) {
+  for (const result of results) {
     if (!result.patch) {
-      skipped[result.skipped === 'payroll entry' ? 'payroll' : 'undated'] += 1;
+      if (result.skipped === 'payroll entry') skipped.payroll += 1;
+      else {
+        skipped.undated += 1;
+        undated.push(result.block.replace(/\s+/g, ' ').slice(0, 70));
+      }
       continue;
     }
     const { patch, metReport } = result;
@@ -858,16 +889,25 @@ function handleBulkImport(text, filename, form) {
         ? patch.phases.map((p) => ({ ...store.newPhase(), ...p }))
         : [],
     };
+    // Two blocks for one date can only be one day. The later replaces the
+    // earlier, but the earlier text is kept in Notes rather than lost.
+    if (seen.has(patch.date)) {
+      duplicates.push(patch.date);
+      entry.notes = `${entry.notes}\n\n--- earlier block for this date (replaced) ---\n${seen.get(patch.date).slice(0, 3000)}`;
+    } else {
+      savedDates.push(patch.date);
+    }
+    seen.set(patch.date, result.block);
     store.saveEntry(entry);
-    savedDates.push(patch.date);
     for (const k of Object.keys(totals)) totals[k] += metReport[k] || 0;
   }
 
   savedDates.sort();
+  const blocks = results.length;
   toast(
     savedDates.length
       ? `Imported ${savedDates.length} day${savedDates.length === 1 ? '' : 's'}` +
-          `${savedDates.length > 1 ? ` (${savedDates[0]} to ${savedDates.at(-1)})` : ` (${savedDates[0]})`}.` +
+          `${savedDates.length > 1 ? ` from ${blocks} blocks (${savedDates[0]} to ${savedDates.at(-1)})` : ` (${savedDates[0]})`}.` +
           ' Existing entries for those dates were overwritten.'
       : 'No day blocks had a readable date — nothing was imported.',
   );
@@ -875,6 +915,25 @@ function handleBulkImport(text, filename, form) {
   if (summary) toast(summary, totals.low || totals.needsMet ? 'warn' : 'ok');
   if (skipped.payroll) toast(`Skipped ${skipped.payroll} payroll entr${skipped.payroll === 1 ? 'y' : 'ies'} — not a work log.`);
   if (skipped.undated) toast(`${skipped.undated} block(s) had no "Date:" line and were skipped entirely.`, 'warn');
+  if (duplicates.length) toast(`${duplicates.length} block(s) repeated a date — the later one replaced the earlier.`, 'warn');
+
+  // Whenever the file held more blocks than days were saved, say exactly why.
+  if (duplicates.length || skipped.undated) {
+    const lines = [
+      `Found ${blocks} day block${blocks === 1 ? '' : 's'} in ${filename}.`,
+      `Saved ${savedDates.length} day${savedDates.length === 1 ? '' : 's'}${savedDates.length ? ` (${savedDates[0]} to ${savedDates.at(-1)})` : ''}.`,
+    ];
+    if (duplicates.length) {
+      lines.push('', `${duplicates.length} block(s) repeated a date already in this file. The later block replaced the earlier one; the earlier block’s text is kept in that day’s Notes:`);
+      lines.push(...[...new Set(duplicates)].map((d) => `  ${d}`));
+    }
+    if (skipped.undated) {
+      lines.push('', `${skipped.undated} block(s) had no "Date:" line, so there was no day to put them on:`);
+      lines.push(...undated.map((u) => `  “${u}…”`));
+    }
+    if (skipped.payroll) lines.push('', `${skipped.payroll} payroll entr${skipped.payroll === 1 ? 'y was' : 'ies were'} skipped.`);
+    openTextPanel({ title: 'Import summary', hint: 'Why some blocks did not become their own day.', text: lines.join('\n') });
+  }
 
   if (savedDates.length) {
     loadDate(savedDates.at(-1));
@@ -970,13 +1029,21 @@ async function handleImportFile(e, form) {
     toast(err.message || 'Could not read that file.', 'warn');
     return;
   }
+  if (!text || !text.trim()) {
+    toast('That file came through empty — some phones hand over cloud files without their contents. Try “Paste text” instead.', 'warn');
+    return;
+  }
+  importText(text, file.name, form);
+}
 
+/** Everything after the text is in hand — a picked file and pasted text both end up here. */
+function importText(text, filename, form) {
   // A heart-rate export has readings and no calendar "Shift:" line.
   if (!/^[ \t]*shift[ \t]*:/im.test(text)) {
     const readings = parseHeartRateText(text, { year: Number(draft.date.slice(0, 4)) });
     if (readings.length >= 5) {
       flushSave();
-      handleHeartRateImport(readings, file.name, form);
+      handleHeartRateImport(readings, filename, form);
       return;
     }
   }
@@ -986,12 +1053,12 @@ async function handleImportFile(e, form) {
   flushSave();
   const blocks = splitDayBlocks(text);
   if (blocks.length > 1) {
-    handleBulkImport(text, file.name, form);
+    handleBulkImport(text, filename, form);
     return;
   }
 
   const { patch, matched, unmatched, metReport } = parseCalendarLog(text, {
-    filename: file.name,
+    filename,
     fallbackDate: draft.date,
   });
 
@@ -1028,8 +1095,13 @@ function onClick(e, form) {
   if (!action) return;
   e.preventDefault();
 
-  if (action === 'import-file') {
-    form.querySelector('#import-file-input').click();
+  if (action === 'import-paste') {
+    openPastePanel({
+      title: 'Paste calendar text',
+      hint: 'Paste one day or many (separate days with a line of ---). Works anywhere a file picker doesn’t, such as inside a phone app.',
+      submit: 'Import',
+      onSubmit: (text) => importText(text, 'pasted text', form),
+    });
   } else if (action === 'add-phase') {
     draft.phases.push(store.newPhase());
     markDirty();

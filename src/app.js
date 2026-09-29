@@ -7,6 +7,7 @@ import * as trendsView from './views/trends.js';
 import * as toolsView from './views/tools.js';
 import * as referenceView from './views/reference.js';
 import * as settingsView from './views/settings.js';
+import * as sync from './sync.js';
 import { reveal, toast, todayIso } from './ui.js';
 
 const TABS = [
@@ -61,17 +62,72 @@ function todayLabel() {
     .toUpperCase();
 }
 
+/**
+ * What the sync pill says. A failure to save on this device outranks
+ * everything: it is the one state where work can genuinely be lost.
+ */
+export function syncPillModel() {
+  const disk = store.storageStatus();
+  const st = sync.getStatus();
+  if (!disk.ok && st.state !== 'synced') return { state: 'bad', text: 'Not saved', title: `${disk.error} ${st.state === 'off' ? 'Copy a backup from Settings.' : ''}` };
+  if (st.state === 'synced') return { state: 'ok', text: 'Synced', title: st.message };
+  if (st.state === 'syncing') return { state: 'busy', text: `Syncing${st.pending ? ` ${st.pending}` : ''}`, title: st.message };
+  if (st.state === 'connecting') return { state: 'busy', text: 'Connecting', title: st.message };
+  if (st.state === 'error') return { state: 'warn', text: 'Sync issue', title: st.message };
+  return { state: 'off', text: 'This device', title: st.message };
+}
+
+function syncPillHtml() {
+  const m = syncPillModel();
+  return `<span id="sync-pill" class="sync-pill" data-state="${m.state}" title="${m.title.replace(/"/g, '&quot;')}">${m.text}</span>`;
+}
+
+let warnedStorage = false;
+
+function updateSyncUi() {
+  const m = syncPillModel();
+  const disk = store.storageStatus();
+  if (!disk.ok && !warnedStorage) {
+    warnedStorage = true;
+    toast(`${disk.error} ${sync.getStatus().state === 'synced' ? 'Your account copy is still being kept.' : 'Use Settings → Back up to keep a copy.'}`, 'warn');
+  }
+  if (disk.ok) warnedStorage = false;
+  const pill = document.getElementById('sync-pill');
+  if (pill) {
+    pill.dataset.state = m.state;
+    pill.textContent = m.text;
+    pill.title = m.title;
+  }
+  const st = sync.getStatus();
+  document.querySelectorAll('[data-sync-line]').forEach((el) => {
+    el.textContent = `${m.title}${st.lastSync && st.state === 'synced' ? ` Last checked ${new Date(st.lastSync).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.` : ''}`.trim();
+    el.dataset.state = disk.ok ? m.state : 'bad';
+  });
+}
+
 function renderHeaderActions() {
   const host = document.getElementById('header-actions');
   if (current === 'log') {
-    host.innerHTML = '<span id="save-state" class="save-pill" data-state="saved" role="status">● Saved</span>';
+    host.innerHTML = `${syncPillHtml()}<span id="save-state" class="save-pill" data-state="saved" role="status">● Saved</span>`;
   } else if (current === 'history') {
     const empty = !store.listEntries().length;
-    host.innerHTML = `<button type="button" class="btn ghost" data-header="export-csv" ${empty ? 'disabled' : ''}>Export CSV</button>`;
+    host.innerHTML = `${syncPillHtml()}<button type="button" class="btn ghost" data-header="export-csv" ${empty ? 'disabled' : ''}>Export CSV</button>`;
   } else {
-    host.innerHTML = `<span class="mono-date">${todayLabel()}</span>
+    host.innerHTML = `${syncPillHtml()}<span class="mono-date">${todayLabel()}</span>
       <button type="button" class="btn primary" data-header="log-today">+ Log day</button>`;
   }
+}
+
+/** Another device changed something: refresh whatever is on screen without disturbing typing. */
+function onRemoteChange(keys) {
+  if (current === 'log') {
+    logView.onRemoteChange(keys);
+  } else {
+    const typing = document.activeElement && document.activeElement.closest?.('#view') && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+    if (!typing) mount();
+  }
+  renderHeaderActions();
+  toast(`Updated from another device (${keys.length} change${keys.length === 1 ? '' : 's'}).`);
 }
 
 function openDay(date) {
@@ -118,6 +174,7 @@ function go(tab) {
   closeMore();
   renderHeaderActions();
   mount();
+  updateSyncUi();
   window.scrollTo(0, 0);
 }
 
@@ -170,6 +227,16 @@ function init() {
   window.addEventListener('pagehide', () => logView.flushSave());
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') logView.flushSave();
+  });
+
+  // Sync last: the app is already usable from this device's own copy.
+  sync.onStatus(updateSyncUi);
+  store.subscribe(updateSyncUi);
+  sync.start({ onRemoteChange });
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('[data-action="sync-now"]')) {
+      if (!sync.syncNow()) toast('Sync isn’t connected in this view.', 'warn');
+    }
   });
 
   window.addEventListener('hashchange', () => {

@@ -181,3 +181,46 @@ export function reveal(root, { skip = '' } = {}) {
     revealObserver.observe(el);
   }
 }
+
+/** A dialog with an empty text box for pasting into; `onSubmit(text)` runs with what was pasted. */
+export function openPastePanel({ title, hint, submit = 'Import', onSubmit }) {
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modal-backdrop';
+  backdrop.innerHTML = `
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-head">
+        <h2 id="modal-title">${esc(title)}</h2>
+        <button type="button" class="icon-btn" data-close aria-label="Close">✕</button>
+      </div>
+      ${hint ? `<p class="muted small">${esc(hint)}</p>` : ''}
+      <textarea id="paste-text" spellcheck="false" placeholder="Paste here…"></textarea>
+      <div class="modal-actions">
+        <button type="button" class="btn ghost" data-close>Cancel</button>
+        <button type="button" class="btn primary" data-submit>${esc(submit)}</button>
+      </div>
+    </div>`;
+  const area = backdrop.querySelector('textarea');
+  const close = () => {
+    backdrop.remove();
+    document.removeEventListener('keydown', onKey);
+  };
+  const onKey = (e) => {
+    if (e.key === 'Escape') close();
+  };
+  document.addEventListener('keydown', onKey);
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop || e.target.closest('[data-close]')) {
+      close();
+    } else if (e.target.closest('[data-submit]')) {
+      if (!area.value.trim()) {
+        toast('Nothing to import yet — paste the text first.', 'warn');
+        return;
+      }
+      const text = area.value;
+      close();
+      onSubmit(text);
+    }
+  });
+  document.body.append(backdrop);
+  area.focus();
+}

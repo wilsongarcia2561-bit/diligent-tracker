@@ -542,11 +542,24 @@ export function parseCalendarLog(text, opts = {}) {
  * with no such line returns the whole text as a single block, so this is
  * safe to run on an ordinary single-day import too.
  */
+/** A line that is only a rule: --- *** ___ === or spaced dashes. Not a table row (those have pipes). */
+const SEPARATOR = /^[ \t]*(?:-{3,}|\*{3,}|_{3,}|={3,}|(?:[-–—][ \t]*){3,})[ \t]*$/m;
+/** A "Date:" label at the start of a line (bold or bulleted markdown allowed). */
+const DATE_LINE = /^[ \t]*(?:[-*•][ \t]+)?\**[ \t]*date[ \t]*\**[ \t]*:/gim;
+
 export function splitDayBlocks(text) {
-  return String(text || '')
-    .split(/^[ \t]*-{3,}[ \t]*$/m)
-    .map((block) => block.trim())
-    .filter(Boolean);
+  const out = [];
+  for (const chunk of String(text || '').replace(/^\uFEFF/, '').split(SEPARATOR)) {
+    // A day with no rule above it still starts at its own "Date:" line, so a
+    // file that forgets a separator doesn't collapse two days into one.
+    const starts = [...chunk.matchAll(DATE_LINE)].map((m) => m.index);
+    if (starts.length < 2) {
+      out.push(chunk);
+      continue;
+    }
+    starts.forEach((at, i) => out.push(chunk.slice(i === 0 ? 0 : at, starts[i + 1] ?? chunk.length)));
+  }
+  return out.map((block) => block.trim()).filter(Boolean);
 }
 
 /**

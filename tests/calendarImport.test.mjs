@@ -484,3 +484,31 @@ describe('non-labor windows', () => {
     assert.equal(patch.nonLaborWindows[0].start, '08:49');
   });
 });
+
+describe('day splitting tolerates real-world files', () => {
+  const day = (d) => `Date: 2026-09-${d}\nShift: 8:00 AM - 12:00 PM\nBreaks: 1\n\n• Water sod`;
+
+  it('splits on --- *** ___ === and spaced dashes, with CRLF line endings and a BOM', () => {
+    for (const rule of ['---', '***', '___', '====', '- - -', '—————']) {
+      assert.equal(splitDayBlocks([day('01'), day('02'), day('03')].join(`\n\n${rule}\n\n`)).length, 3, rule);
+    }
+    const crlf = '\uFEFF' + [day('01'), day('02')].join('\r\n\r\n---\r\n\r\n').replace(/\n/g, '\r\n');
+    assert.equal(splitDayBlocks(crlf).length, 2);
+  });
+
+  it('still starts a new day at each "Date:" line when a separator is missing', () => {
+    const blocks = splitDayBlocks([day('01'), day('02')].join('\n\n') + '\n\n---\n\n' + day('03'));
+    assert.equal(blocks.length, 3);
+    assert.match(blocks[1], /2026-09-02/);
+    assert.ok(!/2026-09-02/.test(blocks[0]));
+  });
+
+  it('does not split on markdown table rules or inside a day', () => {
+    assert.equal(splitDayBlocks('Date: 2026-09-01\n|---|---|\n| a | b |\nNOTE: see Date: earlier').length, 1);
+  });
+
+  it('reads 200 days from one file', () => {
+    const many = Array.from({ length: 200 }, (_, i) => `Date: 2026-01-${String((i % 28) + 1).padStart(2, '0')}\nShift: 8:00 AM - 12:00 PM\n\n• Water sod`).join('\n\n');
+    assert.equal(parseMultiDayLog(many).filter((r) => r.patch).length, 200);
+  });
+});

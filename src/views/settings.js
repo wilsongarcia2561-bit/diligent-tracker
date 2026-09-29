@@ -2,7 +2,7 @@
 
 import { BMR_KCAL, DEFAULT_BREAK_MINUTES, MAX_HR, RESTING_HR } from '../data.js';
 import * as store from '../store.js';
-import { confirmClick, esc, kgToLb, lbToKg, num, openTextPanel, toast, todayIso } from '../ui.js';
+import { confirmClick, esc, kgToLb, lbToKg, num, openPastePanel, openTextPanel, toast, todayIso } from '../ui.js';
 
 /**
  * Listeners attach once, here; redraws after an edit only replace markup.
@@ -82,13 +82,23 @@ function draw(root) {
 
     <section class="card">
       <h3>Your data</h3>
-      <p class="muted">Everything is stored in this browser's local storage. Nothing leaves the machine — export regularly if the data matters.</p>
+      <p class="muted">Everything is kept in this browser’s local storage (and synced to your private area inside the artifact). Export regularly if the data matters.</p>
       <div class="btn-row">
         <button type="button" class="btn" data-action="export">Back up (copy JSON)</button>
-        <button type="button" class="btn ghost" data-action="import">Import JSON backup</button>
+        <label class="btn ghost" for="import-file">Import JSON backup</label>
+        <button type="button" class="btn ghost" data-action="import-paste">Paste JSON backup</button>
         <button type="button" class="btn danger" data-action="clear">Erase all data</button>
       </div>
-      <input type="file" id="import-file" accept="application/json,.json" hidden>
+      <input type="file" id="import-file" class="pick-input">
+    </section>
+
+    <section class="card">
+      <h3>Sync across devices</h3>
+      <p class="muted">Inside the artifact, every day, heart-rate day, weight reading and setting is also saved to your own private area, so your phone and laptop show the same data. Only you can read it, even if you share this page. This device keeps a working copy, so the app still opens instantly and works offline.</p>
+      <p class="sync-line" data-sync-line data-state="off"></p>
+      <div class="btn-row">
+        <button type="button" class="btn" data-action="sync-now">Retry sync now</button>
+      </div>
     </section>
 
     <section class="card">
@@ -143,8 +153,22 @@ function attach(root, onChange) {
         hint: `Everything this browser holds: every day, the weight log and settings. Paste it into a file named diligent3-backup-${todayIso()}.json to keep it; Import restores it.`,
         text: store.exportJson(),
       });
-    } else if (action === 'import') {
-      root.querySelector('#import-file').click();
+    } else if (action === 'import-paste') {
+      openPastePanel({
+        title: 'Paste a JSON backup',
+        hint: 'Paste the whole backup text. It replaces everything on this device, and on your other synced devices.',
+        submit: 'Restore',
+        onSubmit: (text) => {
+          try {
+            store.importJson(text);
+            toast('Backup imported');
+            draw(root);
+            onChange?.();
+          } catch (err) {
+            toast(err.message || 'That doesn’t look like a backup.', 'warn');
+          }
+        },
+      });
     } else if (action === 'clear') {
       if (confirmClick(e.target, 'Erase everything? Click again')) {
         store.clearAll();

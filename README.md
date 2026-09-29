@@ -94,6 +94,25 @@ segment or legend row of the TDEE breakdown shows that line's kcal, share, hours
 rate — measured from an HR export when there is one, otherwise what the day's MET implies
 through the §4 chain run backwards. All of it is off under `prefers-reduced-motion`.
 
+**Sync across devices.** Inside the artifact, every day, heart-rate day, weight log and the
+settings are saved as small documents in the signed-in person's *private* database area
+(`data/users/<id>/…` — unreadable even to people the page is shared with). `localStorage`
+stays the working copy, so the app opens instantly and works offline; `src/sync.js` reconciles
+in the background and the newest change to each document wins. Deletions and *Erase all* travel
+as tombstones so a stale device can't bring them back, a snapshot served from cache is never used
+to overwrite newer data, and a view-only account or a full database degrades to "this device
+only" with the reason in Settings. Outside the artifact (`python3 server.py`) there is no
+`window.claude` and sync stays off. A header pill shows *Synced / Syncing / Sync issue / This
+device / Not saved* (the last when the browser blocks or fills local storage).
+
+**Importing on a phone.** The file picker is a `<label>` with no file-type filter (Android and
+iOS grey out `.md` files when an `accept` list names them), and *Paste text* takes the same
+calendar or heart-rate text where a picker doesn't work at all, such as some in-app browsers.
+Day splitting accepts `---`, `***`, `___`, `===` and spaced-dash rules, CRLF and a BOM, and still
+starts a new day at every `Date:` line if a rule is missing. When a file yields fewer days than
+blocks, an *Import summary* names the repeated dates (the replaced block is kept in Notes) and
+any block with no `Date:` line.
+
 **TEF (§2).** 210 kcal standard. If a daily intake is logged and differs from the 2,000 kcal
 baseline by more than 15%, TEF is re-suggested at 10% of actual intake. Overridable.
 

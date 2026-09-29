@@ -821,3 +821,24 @@ input[type="checkbox"] { accent-color: var(--green); width: 15px; height: 15px; 
 }
 /* Candles hold their start frame until the panel scrolls into view. */
 .chart.grow.waiting .body, .chart.grow.waiting .wick, .chart.grow.waiting .candle-val { animation-play-state: paused; }
+
+/* File picker: a label opens it natively, which phone in-app browsers handle better than a scripted click. */
+.pick-input { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; clip: rect(0 0 0 0); pointer-events: none; }
+label.btn { cursor: pointer; display: inline-flex; align-items: center; }
+.pick-input:focus-visible + .btn, label.btn:focus-within { outline: 2px solid var(--green); outline-offset: 2px; }
+#paste-text { width: 100%; min-height: 240px; font: 12px var(--mono); }
+
+/* Sync status */
+.sync-pill {
+  font: 600 11px var(--mono); text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 5px 10px; border-radius: 20px; white-space: nowrap;
+  color: var(--faint); background: rgba(255, 255, 255, 0.05);
+}
+.sync-pill[data-state="ok"] { color: var(--green); background: var(--green-soft); }
+.sync-pill[data-state="busy"] { color: var(--amber); background: oklch(0.8 0.13 75 / 0.12); }
+.sync-pill[data-state="warn"] { color: var(--amber); background: oklch(0.8 0.13 75 / 0.12); }
+.sync-pill[data-state="bad"] { color: var(--red-text); background: oklch(0.65 0.2 25 / 0.15); }
+.sync-line { font-size: 13px; margin: 12px 0; color: var(--dim); }
+.sync-line[data-state="ok"] { color: var(--green); }
+.sync-line[data-state="bad"], .sync-line[data-state="warn"] { color: var(--amber); }
+@media (max-width: 720px) { .header-actions { gap: 8px; } .sync-pill { padding: 5px 8px; } }
