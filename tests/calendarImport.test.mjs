@@ -504,3 +504,23 @@ describe('day splitting tolerates real-world files', () => {
     assert.equal(parseMultiDayLog(many).filter((r) => r.patch).length, 200);
   });
 });
+
+describe('the calendar\'s own "1.)" layout', () => {
+  it('reads "1.) TITLE" over "•" bullets as the job title, not a task', () => {
+    const { patch } = parseCalendarLog('Date: 2026-10-05\nShift: 1:07 PM - 4:49 PM\nBreaks: 1\n\n1.) CLEAN UP AND PREP FLOWERBED\n• Pick up tree branches to trailer & carry compost via dingo, then spread via heavy duty shovel');
+    assert.equal(patch.phases.length, 1);
+    assert.match(patch.phases[0].description, /Pick up tree branches/);
+    assert.match(patch.notes, /Job: CLEAN UP AND PREP FLOWERBED/);
+  });
+
+  it('treats an empty "1.)" as an empty task, never as a task called ")"', () => {
+    const { patch } = parseCalendarLog('Date: 2026-10-02\nShift: 9:16 AM - 5:06 PM\nBreaks: 6\n\n1.)');
+    assert.equal(patch.phases, undefined);
+    assert.ok(patch.importFlags.some((f) => /task item is empty/.test(f.text)));
+  });
+
+  it('recognizes "Plant & mulch day 2/2" style titles', () => {
+    const { patch } = parseCalendarLog('Date: 2026-10-06\nShift: 1:03 PM - 4:54 PM\n\n• Plant & mulch day 2/2\n• 4-5 yards of mulch via wheelbarrow & hand throw');
+    assert.equal(patch.phases.length, 1);
+  });
+});

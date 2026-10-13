@@ -291,18 +291,26 @@ const HALF_TITLE = /^[ \t]*(?:title[ \t]*:[ \t]*)?["“]?half\.?["”]?[ \t]*$/i
 
 function parseTasks(text, ctx) {
   const bullets = [];
+  const numbered = [];
   for (const line of text.split(/\r?\n/)) {
-    const b = line.match(/^[ \t]*(?:[•\-*+]|\d+[.)])[ \t]*(.+?)[ \t]*$/);
+    // "1.)" (the calendar's own numbering), "1." and "1)" all count, as do • - * +.
+    const b = line.match(/^[ \t]*([•\-*+]|\d+[.)]{1,2}(?![.)]))[ \t]*(.+?)[ \t]*$/);
     if (!b) continue;
-    const raw = b[1].trim();
+    const raw = b[2].trim();
     if (!raw || /^note\b[:\s]/i.test(raw)) continue;
     bullets.push(raw);
+    numbered.push(/^\d/.test(b[1]));
   }
-  // A title names the job ("Patio job", "Sod day") — a longer bullet that just
-  // happens to end in "day" ("Mow and edge lawn all day") is real work.
+  // A title names the job ("Patio job", "Sod day", "Plant & mulch day 2/2") —
+  // a longer bullet that just happens to end in "day" ("Mow and edge lawn all
+  // day") is real work. In the calendar's own layout a numbered "1.) ..." line
+  // heads the "•" task bullets under it, so it is the title too.
   let header = '';
   const first = bullets[0] || '';
-  const isTitle = /\bjob\s*[.:]?$/i.test(first) || (/\bday\s*[.:]?$/i.test(first) && first.split(/\s+/).length <= 3);
+  const words = first.split(/\s+/).length;
+  const isTitle = /\bjob\s*[.:]?$/i.test(first)
+    || (/\bday\b(?:\s*\(?\d+\s*\/\s*\d+\)?)?\s*[.:]?$/i.test(first) && words <= 5)
+    || (numbered[0] && numbered.slice(1).some((n) => !n));
   if (bullets.length > 1 && isTitle) header = bullets.shift();
 
   const blocks = bullets.map((raw) => {
