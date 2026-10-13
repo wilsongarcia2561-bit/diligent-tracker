@@ -564,10 +564,6 @@ input[type="checkbox"] { accent-color: var(--green); width: 15px; height: 15px; 
 .phase-index { font: 600 11px var(--mono); color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; }
 .phase-kcal { font: 600 13px var(--mono); color: var(--green); }
 .phase-head .icon-btn { margin-left: auto; }
-.phase-extra { border-top: 1px dashed var(--line-2); padding-top: 12px; margin-top: 4px; }
-.phase-extra summary { cursor: pointer; font: 500 12px var(--mono); color: var(--dim); text-transform: uppercase; letter-spacing: 0.04em; }
-.phase-extra summary:hover { color: var(--text); }
-.phase-extra > .grid { margin-top: 14px; }
 
 .suggestion { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); margin-bottom: 14px; }
 .tag { font: 600 10px var(--mono); color: var(--green); background: var(--green-soft); padding: 3px 6px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.06em; }
@@ -605,7 +601,7 @@ input[type="checkbox"] { accent-color: var(--green); width: 15px; height: 15px; 
   background: var(--inset); border: 1px solid var(--line); border-radius: var(--r-sm);
 }
 
-/* -------------------------- tables (hrr/reference) ------------------------ */
+/* ---------------------------- tables (reference) -------------------------- */
 
 .table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 6px 0; }
 .table th {
@@ -623,10 +619,6 @@ input[type="checkbox"] { accent-color: var(--green); width: 15px; height: 15px; 
 
 .stat-row + .card, .card + .stat-row { margin-top: 16px; }
 
-.hrr-result { background: var(--panel); border-radius: var(--r-lg); padding: 20px 22px; margin-bottom: 14px; }
-.hrr-result-head { font: 600 11px var(--mono); color: var(--faint); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 14px; }
-.hrr-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 8px; }
-.hrr-grid > div { display: flex; flex-direction: column; gap: 4px; }
 
 .formula {
   font: 500 13px/1.6 var(--mono); color: var(--text);
@@ -645,7 +637,7 @@ input[type="checkbox"] { accent-color: var(--green); width: 15px; height: 15px; 
 }
 .btn-row { display: flex; flex-wrap: wrap; gap: 10px; }
 
-/* view-level heads (reference, hrr, settings) */
+/* view-level heads (reference, settings) */
 .view-hrr > .card-head h2, .view-reference > .card-head h2, .view-settings > .card-head h2 { font-size: 24px; letter-spacing: -0.02em; }
 
 /* --------------------------------- modal --------------------------------- */
@@ -670,6 +662,9 @@ input[type="checkbox"] { accent-color: var(--green); width: 15px; height: 15px; 
 .toast-host {
   position: fixed; right: 20px; bottom: calc(20px + env(safe-area-inset-bottom, 0px));
   z-index: 70; display: flex; flex-direction: column; gap: 8px; max-width: min(420px, calc(100vw - 32px));
+  /* Toasts are read-only: taps go through to whatever is underneath (on a
+     phone that is often a dialog's Import button). */
+  pointer-events: none;
 }
 .toast {
   background: var(--panel-2); border: 1px solid var(--line-2); border-left: 3px solid var(--green);
@@ -842,3 +837,7 @@ label.btn { cursor: pointer; display: inline-flex; align-items: center; }
 .sync-line[data-state="ok"] { color: var(--green); }
 .sync-line[data-state="bad"], .sync-line[data-state="warn"] { color: var(--amber); }
 @media (max-width: 720px) { .header-actions { gap: 8px; } .sync-pill { padding: 5px 8px; } }
+
+/* Days the source data marks unusable: listed, never counted. */
+.pill.unusable { color: var(--amber); background: oklch(0.8 0.13 75 / 0.12); border-color: transparent; font: 600 10px var(--mono); text-transform: uppercase; letter-spacing: 0.04em; padding: 2px 6px; border-radius: 10px; }
+.ledger-row.is-unusable td { color: var(--faint); }

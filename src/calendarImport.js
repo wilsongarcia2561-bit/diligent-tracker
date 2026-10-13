@@ -430,7 +430,6 @@ export function parseCalendarLog(text, opts = {}) {
   if (header) noteLines.push(`Job: ${header}`);
 
   const phases = [];
-  const nonLaborWindows = [];
   let excludedMinutes = 0;
   for (const b of blocks) {
     const c = classifyTask(b.description, dayCtx);
@@ -440,8 +439,6 @@ export function parseCalendarLog(text, opts = {}) {
         noteLines.push(`Non-labor block "${b.description}" (${c.nonLabor}) has no stated duration — enter it under Non-work time.`);
       } else {
         excludedMinutes += minutes;
-        // Keep the clock window too, so heart-rate checks can leave it out (§8.6).
-        if (b.start && b.end) nonLaborWindows.push({ start: b.start, end: b.end, reason: c.nonLabor });
         noteLines.push(`Excluded ${minutes} min of non-labor time: "${b.description}" (${c.nonLabor}, glossary §6).`);
       }
       continue;
@@ -453,7 +450,6 @@ export function parseCalendarLog(text, opts = {}) {
       start: timed ? b.start : '',
       end: timed ? b.end : '',
       met: c.met,
-      captureCategory: c.captureCategory,
       soilCode: c.soilCode,
       netMinutesOverride: packUpCap ? 10 : '',
       metAuto: true,
@@ -464,7 +460,6 @@ export function parseCalendarLog(text, opts = {}) {
     });
   }
   if (excludedMinutes) patch.transitMinutes = excludedMinutes;
-  if (nonLaborWindows.length) patch.nonLaborWindows = nonLaborWindows;
 
   const importFlags = [];
   const revision = bpmRevisionFromNotes(body);
@@ -476,11 +471,11 @@ export function parseCalendarLog(text, opts = {}) {
       p.met = revision.met;
       p.metSource = 'bpm-note';
       p.metConfidence = 'high';
-      p.metBasis = `BPM-confirmed ${revision.blended ? 'blended day MET' : `${direction}revision`} from the day's note (task-based estimate was ${prior ?? 'none'}): "${revision.line}"`;
+      p.metBasis = `${revision.blended ? 'Blended day MET' : `MET ${direction}revision`} from the day's note (task-based estimate was ${prior ?? 'none'}): "${revision.line}"`;
       p.metNotes = (p.metNotes || []).filter((n) => n.level !== 'warn');
     }
     if (revision.direction === 'down') {
-      importFlags.push({ level: 'warn', text: `Downward BPM revision to MET ${revision.met} — recorded with the same prominence as an upward one (§5): "${revision.line}"` });
+      importFlags.push({ level: 'warn', text: `Downward MET revision to ${revision.met} from the day's note — recorded with the same prominence as an upward one (§5): "${revision.line}"` });
     }
     if (phases.length > 1) {
       noteLines.push(`Day-level MET ${revision.met} from the note applied to all ${phases.length} phases, so the day blends to it exactly${revision.blended ? ' — per-block split in the note needs phase times to map' : ''}.`);
@@ -494,10 +489,10 @@ export function parseCalendarLog(text, opts = {}) {
 
   // §8 — standing data-quality problems the calendar text itself reveals.
   if (EMPTY_ITEM.test(body)) {
-    importFlags.push({ level: 'error', text: 'A task item is empty (e.g. "1.)" with nothing after it) — the Aug 28 / Sept 4 failure. Add the description; HR can only salvage it, not recover it.' });
+    importFlags.push({ level: 'error', text: 'A task item is empty (e.g. "1.)" with nothing after it) — the Aug 28 / Sept 4 failure. Add the description; without one this day cannot be classified.' });
   }
   if (HALF_TITLE.test(body)) {
-    importFlags.push({ level: 'warn', text: '"half." title carries no duration information — both Aug 19 and Aug 24 "half." days were full shifts. Go by the logged shift times, and HR where they conflict.' });
+    importFlags.push({ level: 'warn', text: '"half." title carries no duration information — both Aug 19 and Aug 24 "half." days were full shifts. Go by the logged shift times.' });
   }
   // An afternoon shift that starts as lunch ends is normal; a start that
   // lands in the middle of the logged lunch, or in the small hours, is not.
@@ -506,7 +501,7 @@ export function parseCalendarLog(text, opts = {}) {
   const lunchEnd = toMin(patch.lunchEnd);
   const midLunch = lunchStart !== null && lunchEnd !== null && startMin > lunchStart && startMin < lunchEnd;
   if (startMin !== null && (startMin < 4 * 60 || midLunch)) {
-    importFlags.push({ level: 'warn', text: `Calendar start_time ${patch.shiftStart} looks broken (${midLunch ? 'it falls inside the logged lunch' : 'before 4 AM'}) — the Aug 19 / Aug 24 pattern. end_time has held up on every broken entry; recover the true start from HR.` });
+    importFlags.push({ level: 'warn', text: `Calendar start_time ${patch.shiftStart} looks broken (${midLunch ? 'it falls inside the logged lunch' : 'before 4 AM'}) — the Aug 19 / Aug 24 pattern. end_time has held up on every broken entry; correct the start by hand.` });
   }
   if (importFlags.length) patch.importFlags = importFlags;
 
@@ -542,6 +537,29 @@ export function parseCalendarLog(text, opts = {}) {
  * with no such line returns the whole text as a single block, so this is
  * safe to run on an ordinary single-day import too.
  */
+const ENTITIES = { nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", ndash: '–', mdash: '—', middot: '·' };
+
+/** HTML → text with one line per row/paragraph and " | " between table cells (calendar pages saved as .html). */
+export function htmlToText(html) {
+  return String(html || '')
+    .replace(/<(script|style|head)[\s\S]*?<\/\1>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(tr|p|div|li|h[1-6]|section|article|header|footer|table|thead|tbody)>/gi, '\n')
+    .replace(/<\/(td|th)>/gi, ' | ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (m, code) => {
+      if (code[0] === '#') {
+        const n = code[1].toLowerCase() === 'x' ? parseInt(code.slice(2), 16) : parseInt(code.slice(1), 10);
+        return Number.isFinite(n) ? String.fromCodePoint(n) : m;
+      }
+      return ENTITIES[code.toLowerCase()] ?? m;
+    })
+    .split('\n')
+    .map((l) => l.replace(/[ \t ]+/g, ' ').replace(/^[ |]+|[ |]+$/g, '').trim())
+    .filter(Boolean)
+    .join('\n');
+}
+
 /** A line that is only a rule: --- *** ___ === or spaced dashes. Not a table row (those have pipes). */
 const SEPARATOR = /^[ \t]*(?:-{3,}|\*{3,}|_{3,}|={3,}|(?:[-–—][ \t]*){3,})[ \t]*$/m;
 /** A "Date:" label at the start of a line (bold or bulleted markdown allowed). */

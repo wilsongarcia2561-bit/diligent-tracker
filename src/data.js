@@ -24,10 +24,6 @@ export const HEAT_TRIGGER_F = 88;
 /** §3.3 — KRI was retired on this date; every day, before or after, is restated under Intermediate. */
 export const KRI_RETIRED_ON = '2026-09-03';
 
-/** §1 / §4 — heart-rate baselines used for HRR = (corrected BPM − 49) / 152. */
-export const RESTING_HR = 49;
-export const MAX_HR = 201;
-
 /** §1 — bodyweight constant, updated only from fasted morning post-bathroom readings. */
 export const DEFAULT_WEIGHT_KG = 57.6;
 
@@ -50,32 +46,6 @@ export const BACKGROUND_TIERS = [
   { id: 'multi', label: 'Multi-site day (2+ locations)', kcal: 275 },
   { id: 'extreme', label: 'Extreme multi-site (3+ sites, or out-of-state supply run)', kcal: 300 },
 ];
-
-/** §4 — Samsung Galaxy Watch under-reads force-based labor; corrections are additive. */
-export const BPM_CORRECTIONS = [
-  { id: 'moderate', label: 'Moderate work', watchMin: 80, watchMax: 120, add: 30, addMax: 30 },
-  { id: 'heavy', label: 'Heavy work — HC/HCP/SRW', watchMin: 120, watchMax: 155, add: 35, addMax: 35 },
-  { id: 'near-max', label: 'Near-max effort', watchMin: 155, watchMax: 172, add: 35, addMax: 50 },
-];
-
-/** §4 — HRR% → approximate MET reference. */
-export const HRR_MET_TABLE = [
-  { hrrMin: 0.35, hrrMax: 0.45, metMin: 4.5, metMax: 5.5 },
-  { hrrMin: 0.45, hrrMax: 0.55, metMin: 5.5, metMax: 6.5 },
-  { hrrMin: 0.55, hrrMax: 0.65, metMin: 6.5, metMax: 7.5 },
-  { hrrMin: 0.65, hrrMax: 0.75, metMin: 7.5, metMax: 8.5 },
-  { hrrMin: 0.75, hrrMax: 0.85, metMin: 8.5, metMax: 9.5 },
-  { hrrMin: 0.85, hrrMax: 0.95, metMin: 9.5, metMax: 12.0 },
-];
-
-/** §7 — expected Samsung capture rate (active min ÷ net work min) by task type. */
-export const CAPTURE_CATEGORIES = {
-  highStep: { label: 'High-step (mulch throw, wheelbarrow)', min: 0.75, max: 0.85 },
-  mixedModerate: { label: 'Mixed moderate (sod, pine straw, mixed tasks)', min: 0.65, max: 0.8 },
-  digging: { label: 'HC/HCP digging', min: 0.55, max: 0.65 },
-  staticForce: { label: 'SRW / static force work', min: 0.46, max: 0.6 },
-  detail: { label: 'Fixture / cable / light detail work', min: 0.0, max: 0.5 },
-};
 
 /** §5 — soil / task classification codes. */
 export const SOIL_CLASSES = [
@@ -118,7 +88,6 @@ export const SOIL_CLASSES = [
 
 /**
  * §5 — "Other Tasks" MET table, plus keywords used for auto-suggestion (feature §12.2).
- * `capture` maps the task to its expected Samsung capture-rate band (§7).
  */
 export const TASK_METS = [
   {
@@ -126,7 +95,6 @@ export const TASK_METS = [
     label: 'Mulch — hand throw + wheelbarrow',
     metMin: 5.0,
     metMax: 5.5,
-    capture: 'highStep',
     keywords: ['mulch throw', 'hand throw', 'mulch', 'wheelbarrow mulch'],
   },
   {
@@ -134,7 +102,6 @@ export const TASK_METS = [
     label: 'Sod laying + roller',
     metMin: 4.5,
     metMax: 5.0,
-    capture: 'mixedModerate',
     keywords: ['sod lay', 'sod', 'roller', 'sod install'],
   },
   {
@@ -142,7 +109,6 @@ export const TASK_METS = [
     label: 'Wet sod wheelbarrow (loaded)',
     metMin: 7.5,
     metMax: 8.0,
-    capture: 'highStep',
     keywords: ['wet sod', 'loaded wheelbarrow', 'wet sod wheelbarrow'],
   },
   {
@@ -150,7 +116,6 @@ export const TASK_METS = [
     label: 'Pine straw spreading + raking',
     metMin: 4.5,
     metMax: 5.0,
-    capture: 'mixedModerate',
     keywords: ['pine straw', 'pinestraw', 'straw spread', 'raking'],
   },
   {
@@ -158,7 +123,6 @@ export const TASK_METS = [
     label: 'Gravel / mulch shoveling',
     metMin: 5.5,
     metMax: 6.5,
-    capture: 'mixedModerate',
     keywords: ['shovel', 'shoveling', 'gravel shovel', 'mulch shovel', 'gravel', 'haul gravel', 'gravel haul'],
   },
   {
@@ -166,7 +130,6 @@ export const TASK_METS = [
     label: 'Concrete bag carries (80 lbs)',
     metMin: 8.0,
     metMax: 8.0,
-    capture: 'staticForce',
     keywords: ['concrete bag', 'bag carry', 'concrete carries', '80 lb'],
   },
   {
@@ -174,7 +137,6 @@ export const TASK_METS = [
     label: 'Wet concrete wheelbarrow haul + pour',
     metMin: 8.0,
     metMax: 9.0,
-    capture: 'highStep',
     keywords: ['wet concrete', 'concrete pour', 'pour', 'concrete haul'],
   },
   {
@@ -182,7 +144,6 @@ export const TASK_METS = [
     label: 'Foundation digging (pre-softened)',
     metMin: 6.5,
     metMax: 7.0,
-    capture: 'digging',
     keywords: ['foundation dig', 'pre-softened', 'footing dig'],
   },
   {
@@ -190,7 +151,6 @@ export const TASK_METS = [
     label: 'Compacted gravel base + paver install',
     metMin: 6.5,
     metMax: 7.0,
-    capture: 'digging',
     keywords: ['paver', 'gravel base', 'compacted base', 'patio'],
   },
   {
@@ -198,7 +158,6 @@ export const TASK_METS = [
     label: 'SRW cap layer (lighter blocks, rushing pace)',
     metMin: 7.5,
     metMax: 7.5,
-    capture: 'staticForce',
     keywords: ['srw cap', 'cap layer', 'cap block'],
   },
   {
@@ -206,7 +165,6 @@ export const TASK_METS = [
     label: 'Retaining wall foundation prep',
     metMin: 6.5,
     metMax: 6.5,
-    capture: 'digging',
     keywords: ['wall foundation', 'retaining wall prep', 'wall prep'],
   },
   {
@@ -214,7 +172,6 @@ export const TASK_METS = [
     label: 'Light estate cleanup / leaf blow',
     metMin: 4.5,
     metMax: 5.0,
-    capture: 'mixedModerate',
     keywords: ['estate cleanup', 'leaf blow', 'blower', 'cleanup'],
   },
   {
@@ -222,7 +179,6 @@ export const TASK_METS = [
     label: 'Trimming / weed cleanup',
     metMin: 4.5,
     metMax: 5.0,
-    capture: 'mixedModerate',
     keywords: ['trim', 'trimming', 'weed', 'weeding', 'edging'],
   },
   {
@@ -230,7 +186,6 @@ export const TASK_METS = [
     label: 'Plant carrying / placement (light)',
     metMin: 3.0,
     metMax: 3.5,
-    capture: 'mixedModerate',
     keywords: ['plant carry', 'plant placement', 'planting', 'shrub'],
   },
   {
@@ -238,7 +193,6 @@ export const TASK_METS = [
     label: 'Sprinkler repair / inspection',
     metMin: 3.5,
     metMax: 4.5,
-    capture: 'detail',
     keywords: ['sprinkler', 'irrigation', 'head repair'],
   },
   {
@@ -246,7 +200,6 @@ export const TASK_METS = [
     label: 'Trench digging (compacted base, under concrete)',
     metMin: 6.5,
     metMax: 6.5,
-    capture: 'digging',
     keywords: ['trench', 'trenching', 'under concrete'],
   },
   {
@@ -254,7 +207,6 @@ export const TASK_METS = [
     label: 'Landscape lighting / cable work',
     metMin: 4.0,
     metMax: 4.0,
-    capture: 'detail',
     keywords: ['lighting', 'cable', 'low voltage', 'wire'],
   },
 ];
@@ -273,7 +225,6 @@ export const SOIL_KEYWORDS = {
 /** Carried into the UI as standing disclaimers. */
 export const KNOWN_LIMITATIONS = [
   'MET values are population averages with real individual variance. This framework should never claim single-day precision better than roughly ±300–500 kcal.',
-  'BPM correction factors (+30 / +35) are derived from a small number of manual pulse checks, not a validated device. Treat HRR-derived MET as directional confirmation, not ground truth.',
   'Samsung "Total burned calories" is not TDEE. Never reference it.',
   'Background and NEAT lines are lower-confidence estimates and are visually distinguished from the active-kcal calculation throughout this app.',
   'The ~1,950 kcal non-work / university day is still unvalidated — it needs a full uni-day HR export paired with that day\'s step count.',

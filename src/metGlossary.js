@@ -17,7 +17,7 @@
  *      averaged; a dingo clause splits machine/manual evenly (§2).
  *   5. §2/§5 deltas (loaded wheelbarrow, machete, rush, incline…), then the
  *      §9 sanity clamp to 3.5–9.0.
- * BPM-confirmed revisions override all of this — see bpmRevisionFromNotes.
+ * A MET revision written in the day's NOTE line overrides all of this — see bpmRevisionFromNotes.
  */
 
 import { suggestMet } from './engine.js';
@@ -84,63 +84,63 @@ export function daySoil(text) {
  * supersedes plain sod and an explicit mid-weight block supersedes SRW.
  */
 export const ANCHORS = [
-  { id: 'srw-block', label: 'SRW block carries', lo: 9.0, hi: 9.0, group: 'block', hauling: true, capture: 'staticForce',
+  { id: 'srw-block', label: 'SRW block carries', lo: 9.0, hi: 9.0, group: 'block', hauling: true,
     re: /\b75\s*[-–]\s*78\s*lb|\bhollow\s+core\b|\bheavy\s+duty\s+blocks?\b/i, notIf: /\bnot\s+(?:the\s+)?heavy\b/i },
-  { id: 'mid-block', label: 'Retaining-wall block, mid-weight', lo: 6.5, hi: 7.0, group: 'block', hauling: true, capture: 'staticForce',
+  { id: 'mid-block', label: 'Retaining-wall block, mid-weight', lo: 6.5, hi: 7.0, group: 'block', hauling: true,
     re: /\bnot\s+(?:the\s+)?heavy\b[^.]*\bnot\s+small\b|\bnot\s+the\s+small\s+ones\b/i },
-  { id: 'block', label: 'Retaining-wall block', lo: 6.5, hi: 7.0, group: 'block', hauling: true, capture: 'staticForce',
+  { id: 'block', label: 'Retaining-wall block', lo: 6.5, hi: 7.0, group: 'block', hauling: true,
     re: /\bblocks?\b/i },
-  { id: 'concrete-bags', label: 'Concrete bag carries (80 lb)', lo: 8.0, hi: 8.0, capture: 'staticForce',
+  { id: 'concrete-bags', label: 'Concrete bag carries (80 lb)', lo: 8.0, hi: 8.0,
     re: /\bconcrete\s+bags?\b|\b\d+\s+bags?\b|\b80\s*lbs?\b/i },
-  { id: 'concrete-demo', label: 'Concrete demolition', lo: 8.0, hi: 8.0, capture: 'staticForce',
+  { id: 'concrete-demo', label: 'Concrete demolition', lo: 8.0, hi: 8.0,
     re: /\bsledge\s?hammer\w*\b|\b(break\w*|demolish\w*|jackhammer\w*)\b[^.]*\bconcrete\b|\bconcrete\b[^.]*\b(break\w*|demolish\w*)\b/i },
-  { id: 'concrete-mix', label: 'Mix concrete (cement + sand)', lo: 6.5, hi: 7.0, noWheelbarrow: true, capture: 'highStep',
+  { id: 'concrete-mix', label: 'Mix concrete (cement + sand)', lo: 6.5, hi: 7.0, noWheelbarrow: true,
     re: /\bmix\w*\b[^.]*\b(cement|concrete)\b|\b(cement|concrete)\b[^.]*\bmix\w*/i },
-  { id: 'wet-sod', label: 'Wet sod', lo: 7.5, hi: 8.0, group: 'sod', hauling: true, capture: 'highStep',
+  { id: 'wet-sod', label: 'Wet sod', lo: 7.5, hi: 8.0, group: 'sod', hauling: true,
     re: /\b(wet|damp\w*)\b[^.]*\bsod\b|\bsod\b[^.]*\b(wet|damp\w*)\b/i },
-  { id: 'sod-roller', label: 'Sod roller (loaded drum)', lo: 5.5, hi: 6.5, group: 'sod', capture: 'mixedModerate',
+  { id: 'sod-roller', label: 'Sod roller (loaded drum)', lo: 5.5, hi: 6.5, group: 'sod',
     re: /\b(sod|lawn)\s+roller\b|\broll(?:ed|ing)?\s+over\b[^.]*\bsod\b/i },
   // In a dig clause ("dig out sod edge") sod names the place, not sod being laid.
-  { id: 'sod', label: 'Sod lay (dry)', lo: 4.5, hi: 5.0, group: 'sod', hauling: true, notInDig: true, capture: 'mixedModerate',
+  { id: 'sod', label: 'Sod lay (dry)', lo: 4.5, hi: 5.0, group: 'sod', hauling: true, notInDig: true,
     re: /\bsod\b|\bzoysia\b|\bbermuda\b/i },
-  { id: 'lumber', label: 'Landscape lumber', lo: 7.0, hi: 7.0, hauling: true, capture: 'staticForce',
+  { id: 'lumber', label: 'Landscape lumber', lo: 7.0, hi: 7.0, hauling: true,
     re: /\blumber\b|\btimbers?\b/i },
-  { id: 'fabric', label: 'Landscape fabric', lo: 4.5, hi: 5.0, capture: 'mixedModerate',
+  { id: 'fabric', label: 'Landscape fabric', lo: 4.5, hi: 5.0,
     re: /\bfabric\b/i },
-  { id: 'polymer', label: 'Polymer sand joint', lo: 4.5, hi: 5.0, capture: 'detail',
+  { id: 'polymer', label: 'Polymer sand joint', lo: 4.5, hi: 5.0,
     re: /\bpolymer\w*\s+sand\b|\bsand\s+joints?\b/i },
-  { id: 'planting', label: 'Flowerbed peel / planting', lo: 4.5, hi: 5.0, capture: 'mixedModerate',
+  { id: 'planting', label: 'Flowerbed peel / planting', lo: 4.5, hi: 5.0,
     re: /\bpeel\b|\bplant(s|ing|ed)?\b/i,
-    risk: 'Flowerbed/planting work was BPM-revised to MET 8.0 on Aug 27 — this phrasing is a known under-description risk. Check BPM if available.' },
-  { id: 'debris-wood', label: 'Branches / wood / brush hauling', lo: 5.5, hi: 6.0, group: 'debris', hauling: true, capture: 'highStep',
+    risk: 'Flowerbed/planting work was revised up to MET 8.0 on Aug 27 — this phrasing is a known under-description risk. Describe the load and how continuous it was.' },
+  { id: 'debris-wood', label: 'Branches / wood / brush hauling', lo: 5.5, hi: 6.0, group: 'debris', hauling: true,
     re: /\b(branch(es)?|logs?|wood|bush(es)?|brush|limbs?)\b/i,
-    risk: '"Move cut branches and wood" was BPM-revised to MET 7.5 on Aug 31 — vague debris phrasing is a known under-description risk. Check BPM if available.' },
-  { id: 'debris', label: 'Debris / trash hauling', lo: 5.5, hi: 6.0, group: 'debris', hauling: true, capture: 'highStep',
+    risk: '"Move cut branches and wood" was revised up to MET 7.5 on Aug 31 — vague debris phrasing is a known under-description risk. Describe the load and how continuous it was.' },
+  { id: 'debris', label: 'Debris / trash hauling', lo: 5.5, hi: 6.0, group: 'debris', hauling: true,
     re: /\b(?<!foreign\s)debris\b|\btrash\b|\bjunk\b/i },
-  { id: 'brick-removal', label: 'Brick / paver removal', lo: 6.5, hi: 6.5, group: 'paver', hauling: true, capture: 'digging',
+  { id: 'brick-removal', label: 'Brick / paver removal', lo: 6.5, hi: 6.5, group: 'paver', hauling: true,
     re: /\b(remov\w*|pull\w*|tear\w*)\b[^.]*\b(brick|paver)s?\b|\b(brick|paver)s?\b[^.]*\bremov\w*/i },
-  { id: 'paver-install', label: 'Paver install', lo: 6.5, hi: 7.0, group: 'paver', capture: 'digging',
+  { id: 'paver-install', label: 'Paver install', lo: 6.5, hi: 7.0, group: 'paver',
     re: /\bpaver(s|stones?)?\b|\bflagstone\b|\bflexstone\b/i },
-  { id: 'gravel', label: 'Gravel haul / spread', lo: 5.5, hi: 6.5, hauling: true, capture: 'highStep',
+  { id: 'gravel', label: 'Gravel haul / spread', lo: 5.5, hi: 6.5, hauling: true,
     re: /\bgravel\b/i },
-  { id: 'dingo', label: 'Dingo / skid steer (machine)', lo: 4.5, hi: 5.5, machine: true, capture: 'detail',
+  { id: 'dingo', label: 'Dingo / skid steer (machine)', lo: 4.5, hi: 5.5, machine: true,
     re: /\bdingo\b|\bskid\s*steer\b/i },
-  { id: 'leaf-blower', label: 'Leaf blower', lo: 4.5, hi: 5.0, capture: 'mixedModerate',
+  { id: 'leaf-blower', label: 'Leaf blower', lo: 4.5, hi: 5.0,
     re: /\bleaf\s*blow\w*|\bblower\b/i },
-  { id: 'glue', label: 'Glue on wall (finishing)', lo: 3.5, hi: 4.0, tail: true, capture: 'detail',
+  { id: 'glue', label: 'Glue on wall (finishing)', lo: 3.5, hi: 4.0, tail: true,
     re: /\bglue\b|\badhesive\b/i },
-  { id: 'maintenance', label: 'Repair / inspect / water', lo: 3.5, hi: 4.0, suppresses: ['sod'], capture: 'detail',
+  { id: 'maintenance', label: 'Repair / inspect / water', lo: 3.5, hi: 4.0, suppresses: ['sod'],
     re: /\b(repair\w*|inspect\w*|water(?:ed|ing)?)\b/i },
 ];
 
 /** §4 — verb patterns, used only when nothing above (or in the spec table) matched. */
 export const VERBS = [
-  { id: 'remove', label: 'Remove / demolish / break', lo: 6.5, hi: 8.0, re: /\b(remov\w*|demolish\w*|break\w*|tear\s+out)\b/i, capture: 'digging' },
-  { id: 'haul', label: 'Haul / carry / move', lo: 5.5, hi: 6.0, re: /\b(haul\w*|carr(?:y|ied|ying)|mov(?:e|ed|ing)|bring|brought|lift\w*|dump\w*|reorganiz\w*)\b/i, hauling: true, capture: 'highStep' },
-  { id: 'install', label: 'Install / implement / lay', lo: 4.5, hi: 5.5, re: /\b(install\w*|implement\w*|lay|laid|laying)\b/i, capture: 'mixedModerate' },
-  { id: 'spread', label: 'Spread / level / rake', lo: 4.5, hi: 5.0, re: /\b(spread\w*|level\w*|rak(?:e|ed|ing))\b/i, capture: 'mixedModerate' },
+  { id: 'remove', label: 'Remove / demolish / break', lo: 6.5, hi: 8.0, re: /\b(remov\w*|demolish\w*|break\w*|tear\s+out)\b/i },
+  { id: 'haul', label: 'Haul / carry / move', lo: 5.5, hi: 6.0, re: /\b(haul\w*|carr(?:y|ied|ying)|mov(?:e|ed|ing)|bring|brought|lift\w*|dump\w*|reorganiz\w*)\b/i, hauling: true },
+  { id: 'install', label: 'Install / implement / lay', lo: 4.5, hi: 5.5, re: /\b(install\w*|implement\w*|lay|laid|laying)\b/i },
+  { id: 'spread', label: 'Spread / level / rake', lo: 4.5, hi: 5.0, re: /\b(spread\w*|level\w*|rak(?:e|ed|ing))\b/i },
 ];
-const PACK_UP = { id: 'packup', label: 'Pack up (end of shift)', lo: 3.5, hi: 4.5, capture: 'detail' };
+const PACK_UP = { id: 'packup', label: 'Pack up (end of shift)', lo: 3.5, hi: 4.5 };
 
 /** §6 — phrases that mark a block as non-labor time, excluded from active hours. */
 export const NON_LABOR = [
@@ -166,17 +166,17 @@ const rangeText = (lo, hi) => (lo === hi ? fmt(lo) : `${fmt(lo)}–${fmt(hi)}`);
  * @returns {{
  *   nonLabor?: string, met: number|'', confidence: 'high'|'medium'|'low',
  *   basis: string, notes: Array<{level:string,text:string}>, soilCode: string,
- *   captureCategory: string, packUp: boolean
+ *   packUp: boolean
  * }}
  */
 export function classifyTask(text, ctx = {}) {
   const clause = String(text || '').trim();
   const notes = [];
-  if (!clause && !ctx.soilCode) return { met: '', confidence: 'low', basis: '', notes, soilCode: '', captureCategory: '', packUp: false };
+  if (!clause && !ctx.soilCode) return { met: '', confidence: 'low', basis: '', notes, soilCode: '', packUp: false };
 
   const nonLabor = nonLaborReason(clause);
   if (nonLabor) {
-    return { nonLabor, met: '', confidence: 'high', basis: `Non-labor: ${nonLabor} — excluded from active hours (§6)`, notes, soilCode: '', captureCategory: '', packUp: false };
+    return { nonLabor, met: '', confidence: 'high', basis: `Non-labor: ${nonLabor} — excluded from active hours (§6)`, notes, soilCode: '', packUp: false };
   }
 
   const feels = ctx.feelsLikeF === '' || ctx.feelsLikeF === null || ctx.feelsLikeF === undefined ? null : Number(ctx.feelsLikeF);
@@ -209,7 +209,7 @@ export function classifyTask(text, ctx = {}) {
       tier = MC_DEFAULT;
       defaulted = true;
       lower(LEVEL.low);
-      notes.push({ level: 'warn', text: `"${clause}": soil not stated for a dig — defaulted to MC (5.5–6.5) per glossary §1. Every unstated-soil day BPM has recovered so far came in at HC or higher.` });
+      notes.push({ level: 'warn', text: `"${clause}": soil not stated for a dig — defaulted to MC (5.5–6.5) per glossary §1. Every unstated-soil day checked so far came in at HC or higher.` });
     }
     let lo = tier.lo;
     let hi = tier.hi;
@@ -221,7 +221,7 @@ export function classifyTask(text, ctx = {}) {
       label = `Foundation dig (depth given) on ${tier.code} soil`;
     }
     soilCode = tier.code;
-    acts.push({ id: 'dig', label, lo, hi, anchored: !defaulted, capture: 'digging' });
+    acts.push({ id: 'dig', label, lo, hi, anchored: !defaulted });
   }
 
   const anchorText = digContext ? clause.replace(/\([^)]*\)/g, ' ') : clause;
@@ -249,7 +249,7 @@ export function classifyTask(text, ctx = {}) {
   if (!acts.length) {
     const spec = suggestMet(clause);
     if (spec) {
-      acts.push({ id: `spec-${spec.id}`, label: `${spec.label} (spec §5 table)`, lo: spec.metMin, hi: spec.metMax, anchored: true, capture: spec.capture, hauling: /\b(haul|carry|wheel\s?barrow)/i.test(clause) });
+      acts.push({ id: `spec-${spec.id}`, label: `${spec.label} (spec §5 table)`, lo: spec.metMin, hi: spec.metMax, anchored: true, hauling: /\b(haul|carry|wheel\s?barrow)/i.test(clause) });
       lower(LEVEL.medium);
       fromFallback = 'spec';
       notes.push({ level: 'info', text: `"${clause}": not in the MET glossary — used the spec §5 task table (${spec.label}, MET ${rangeText(spec.metMin, spec.metMax)}), per glossary §7.` });
@@ -267,7 +267,7 @@ export function classifyTask(text, ctx = {}) {
   }
   if (!acts.length) {
     notes.push({ level: 'warn', text: `"${clause}": no glossary term, spec task or work verb matched — enter a MET by hand (glossary §7: never assign one silently).` });
-    return { met: '', confidence: 'low', basis: 'No match — enter by hand', notes, soilCode, captureCategory: '', packUp: false };
+    return { met: '', confidence: 'low', basis: 'No match — enter by hand', notes, soilCode, packUp: false };
   }
 
   const steps = [];
@@ -328,7 +328,7 @@ export function classifyTask(text, ctx = {}) {
   }
   if (/\b(semi[-\s]?rush|rush(?:ed|ing)?)\b/i.test(clause)) {
     met += 0.5;
-    steps.push('rush pace +0.5, weighted lightly (§5 — Sept 5 BPM came in lower)');
+    steps.push('rush pace +0.5, weighted lightly (§5 — Sept 5 came in lower than it read)');
   }
   if (/\bsteep\b|\bincline\b/i.test(clause)) {
     met += 1.25;
@@ -341,14 +341,12 @@ export function classifyTask(text, ctx = {}) {
   }
   if (shade && feels !== null && feels >= 88) steps.push('under shade — heat not treated as confirming (§5)');
 
-  const lead = acts.find((a) => a.capture) || {};
   return {
     met: Math.round(met * 100) / 100,
     confidence: LEVEL_NAME[confidence],
     basis: steps.join(' · '),
     notes,
     soilCode,
-    captureCategory: lead.capture || '',
     packUp: acts.length === 1 && acts[0].id === 'packup',
     source: fromFallback || 'glossary',
   };

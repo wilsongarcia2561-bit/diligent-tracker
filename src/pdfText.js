@@ -46,7 +46,7 @@ export async function extractPdfText(arrayBuffer) {
     const page = await doc.getPage(i);
     const content = await page.getTextContent();
     // Keep the PDF's line structure: a table row or a "1:05 PM 118 bpm" line
-    // must stay one line for the heart-rate and calendar parsers to read it.
+    // must stay one line for the calendar parser to read it.
     let text = '';
     let lastY = null;
     for (const item of content.items) {

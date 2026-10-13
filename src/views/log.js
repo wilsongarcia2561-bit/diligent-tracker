@@ -8,7 +8,6 @@
 
 import {
   BACKGROUND_TIERS,
-  CAPTURE_CATEGORIES,
   DAY_UNCERTAINTY_KCAL,
   NEAT_TIERS,
   NON_WORK_DAY,
@@ -19,15 +18,14 @@ import {
   MODEL,
   MODEL_FORMULAS,
   MODEL_LABELS,
-  bpmForMet,
   durationMinutes,
   formatDuration,
   calculateDay,
 } from '../engine.js';
 import { COMPONENTS, trailingAverage } from '../analytics.js';
-import { parseCalendarLog, parseMultiDayLog, splitDayBlocks } from '../calendarImport.js';
+import { htmlToText, parseCalendarLog, parseMultiDayLog, splitDayBlocks } from '../calendarImport.js';
 import { classifyTask, daySoil, isShadeDay } from '../metGlossary.js';
-import { groupByDate, htmlToText, parseHeartRateText } from '../heartRate.js';
+import { looksLikeSummaryTable, parseSummaryTable } from '../summaryImport.js';
 import * as store from '../store.js';
 import { confirmClick, esc, kcal, num, openPastePanel, openTextPanel, pct, toast, todayIso } from '../ui.js';
 import { calculatedDays } from './history.js';
@@ -117,7 +115,7 @@ function dayContext() {
 /**
  * Re-read a phase's description through the MET glossary. Only touches a
  * phase whose MET is still automatic (or blank) unless forced — a MET typed
- * by hand, or one taken from a BPM-confirmed note, is left alone.
+ * by hand, or one taken from a revision in the day's note, is left alone.
  */
 function applyGlossary(phase, { force = false } = {}) {
   const manual = phase.met !== '' && phase.met !== null && !phase.metAuto;
@@ -134,14 +132,14 @@ function applyGlossary(phase, { force = false } = {}) {
   Object.assign(phase, {
     met: c.met, metAuto: true, metSource: c.source, metConfidence: c.confidence, metBasis: c.basis, metNotes: c.notes,
   });
-  if (c.captureCategory) phase.captureCategory = c.captureCategory;
   if (!phase.soilManual) phase.soilCode = c.soilCode;
   return true;
 }
 
 function basisHtml(phase) {
-  if (phase.metSource === 'bpm-note' || phase.metSource === 'bpm-export') {
-    return `<span class="tag conf-high">${phase.metSource === 'bpm-note' ? 'BPM note' : 'HR export'}</span><span class="basis-text">${esc(phase.metBasis)}</span>`;
+  if (phase.metSource === 'bpm-note' || phase.metSource === 'bpm-export' || phase.metSource === 'summary') {
+    const tag = phase.metSource === 'summary' ? 'From imported file' : phase.metSource === 'bpm-note' ? 'From day note' : 'Revised';
+    return `<span class="tag conf-high">${tag}</span><span class="basis-text">${esc(phase.metBasis)}</span>`;
   }
   if (phase.metAuto && phase.metBasis) {
     const conf = phase.metConfidence || 'medium';
@@ -164,7 +162,6 @@ function syncPhaseInputs(form, phase) {
     if (el && el !== document.activeElement) el.value = value ?? '';
   };
   set('met', phase.met);
-  set('captureCategory', phase.captureCategory);
   set('soilCode', phase.soilCode);
   const basis = form.querySelector(`[data-basis="${phase.id}"]`);
   if (basis) basis.innerHTML = basisHtml(phase);
@@ -198,39 +195,9 @@ function soilOptions(selected) {
   ].join('');
 }
 
-function captureOptions(selected) {
-  return [
-    '<option value="">— not set —</option>',
-    ...Object.entries(CAPTURE_CATEGORIES).map(
-      ([key, cat]) =>
-        `<option value="${key}" ${key === selected ? 'selected' : ''}>${esc(cat.label)} (${Math.round(cat.min * 100)}–${Math.round(cat.max * 100)}%)</option>`,
-    ),
-  ].join('');
-}
-
 function allocText(result) {
   if (!result) return 'Leave blank to prorate';
   return `Allocated: ${formatDuration(result.netMinutes)}${result.exactNet ? ' (exact)' : ' (prorated)'}`;
-}
-
-/** A "use this MET" button for a BPM check that disagrees with the logged MET. */
-function hrApplyButton(check, attrs, label = 'Use MET') {
-  if (!check || !check.suggestedMet || (check.verdict !== 'revise-up' && check.verdict !== 'revise-down')) return '';
-  return `<button type="button" class="btn sm" ${attrs} data-met="${check.suggestedMet}" data-verdict="${check.verdict}">${label} ${check.suggestedMet}</button>`;
-}
-
-/** Record a BPM-driven revision on a phase and say which way it went (§5). */
-function applyHrMet(phase, met, source) {
-  const prior = phase.met === '' ? null : Number(phase.met);
-  const dir = prior === null || prior === met ? '' : prior > met ? 'downward ' : 'upward ';
-  Object.assign(phase, {
-    met,
-    metAuto: false,
-    metSource: 'bpm-export',
-    metConfidence: 'high',
-    metBasis: `BPM-confirmed ${dir}revision from the heart-rate export (was ${prior ?? 'blank'}): ${source}`,
-    metNotes: [],
-  });
 }
 
 function phaseCard(phase, index, calc) {
@@ -265,35 +232,22 @@ function phaseCard(phase, index, calc) {
       )}
     </div>
 
-    <details class="phase-extra" ${phase.watchBpm || phase.samsungActiveMinutes || phase.metRevisionNote ? 'open' : ''}>
-      <summary>Validation &amp; cross-checks</summary>
-      <div class="grid grid-3">
-        ${field('Watch BPM (peak)', phaseInput(phase.id, 'watchBpm', phase.watchBpm, 'type="number" min="40" max="220" placeholder="uncorrected"'))}
-        ${field('Samsung active min', phaseInput(phase.id, 'samsungActiveMinutes', phase.samsungActiveMinutes, 'type="number" min="0" placeholder="cross-check only"'))}
-        ${field('Capture category', `<select id="p-${phase.id}-captureCategory" data-phase="${phase.id}" data-field="captureCategory">${captureOptions(phase.captureCategory)}</select>`)}
-      </div>
-      ${
-        result && result.bpm
-          ? `<div class="callout ${result.bpm.verdict === 'revise-up' || result.bpm.verdict === 'revise-down' ? 'warn' : 'info'}">
-              ${result.bpm.fromExport ? `<div class="small">Heart-rate export, ${esc(phase.start)}–${esc(phase.end)}: median ${result.bpm.stats.median} bpm (90th pct ${result.bpm.stats.p90}, peak ${result.bpm.stats.peak}) over ${result.bpm.stats.n} readings</div>` : ''}
-              <strong>${result.bpm.correctedBpm}${result.bpm.correctedBpmMax !== result.bpm.correctedBpm ? `–${result.bpm.correctedBpmMax}` : ''} corrected BPM</strong>
-              (${esc(result.bpm.correction.note)}) → HRR ${pct(result.bpm.hrr)}${result.bpm.hrrMax !== result.bpm.hrr ? `–${pct(result.bpm.hrrMax)}` : ''}
-              ${result.bpm.implied ? ` → implied MET ${result.bpm.implied.metMin}–${result.bpm.implied.metMax}` : ''}
-              <div>${esc(result.bpm.message)}</div>
-              ${hrApplyButton(result.bpm, `data-action="apply-hr-met" data-phase="${phase.id}"`)}
-            </div>`
-          : ''
-      }
-      ${
-        result && result.capture
-          ? `<div class="callout ${result.capture.status === 'expected' ? 'info' : 'warn'}">
-              Capture rate ${pct(result.capture.rate)}${result.capture.band ? ` vs expected ${pct(result.capture.band.min)}–${pct(result.capture.band.max)}` : ''} — cross-check floor only; calendar net work time is authoritative.
-            </div>`
-          : ''
-      }
-      ${field('MET revision note', phaseInput(phase.id, 'metRevisionNote', phase.metRevisionNote, 'placeholder="e.g. revised 6.5 → 7.5 on BPM evidence"'))}
-    </details>
+    ${field('MET revision note', phaseInput(phase.id, 'metRevisionNote', phase.metRevisionNote, 'placeholder="optional — e.g. revised 6.5 → 7.5, why"'))}
   </div>`;
+}
+
+/** The net-work arithmetic under the Shift card. A summary row gives the answer directly. */
+function stripHtml(entry, calc) {
+  if (calc.timing.fromSummary) {
+    return `<span class="net">Net work <strong>${formatDuration(calc.timing.netWorkMinutes)}</strong> as given by the imported row</span>
+      <span class="faint">Clear “Known net work” to compute it from the shift instead.</span>`;
+  }
+  return `
+      <span>Gross shift <strong>${formatDuration(durationMinutes(entry.shiftStart, entry.shiftEnd))}</strong></span>
+      <span>− eating <strong>${formatDuration(calc.timing.eatingMinutes)}</strong></span>
+      <span>− breaks <strong>${formatDuration(calc.timing.breakMinutes)}</strong>${calc.timing.breakEstimated && Number(entry.breakCount) > 0 ? ' <em>est.</em>' : ''}</span>
+      <span>− non-work <strong>${formatDuration(calc.timing.transitMinutes)}</strong></span>
+      <span class="net">= net work <strong>${formatDuration(calc.timing.netWorkMinutes)}</strong></span>`;
 }
 
 function formTemplate(entry, calc) {
@@ -312,6 +266,7 @@ function formTemplate(entry, calc) {
         <input type="date" id="entry-date" value="${esc(entry.date)}">
       </label>
       <label class="check"><input type="checkbox" id="f-restDay" data-field="restDay" ${entry.restDay ? 'checked' : ''}> Non-work day</label>
+      <label class="check" title="Leave this day out of Trends and every average"><input type="checkbox" id="f-unusable" data-field="unusable" ${entry.unusable ? 'checked' : ''}> Unusable</label>
       <label class="btn ghost" for="import-file-input">Import from file</label>
       <input type="file" id="import-file-input" class="pick-input">
       <button type="button" class="btn ghost" data-action="import-paste">Paste text</button>
@@ -356,9 +311,10 @@ Shift: 7:56 AM - 11:51 AM
     entry.restDay
       ? `<section class="card">
     <h2>Non-work / university day <span class="sec-ref">§7</span></h2>
-    <p class="muted">No task or soil to classify. Built additively: BMR + walking (MET ${NON_WORK_DAY.walkingMet}) + general-day NEAT + TEF, with no separate background bucket. Still unvalidated against HR.</p>
+    <p class="muted">No task or soil to classify. Built additively: BMR + walking (MET ${NON_WORK_DAY.walkingMet}) + general-day NEAT + TEF, with no separate background bucket. Still unvalidated.</p>
     <div class="grid grid-2">
       ${field('Step count', input('steps', entry.steps, `type="number" min="0" step="100" placeholder="${NON_WORK_DAY.defaultSteps}"`), `Blank assumes ${NON_WORK_DAY.defaultSteps.toLocaleString()} (~1.4 hr walking)`)}
+      ${field('Walking kcal (if known)', input('walkingKcal', entry.walkingKcal, 'type="number" min="0" step="1" placeholder="from steps"'), 'Overrides the step estimate — imported rows fill this in')}
     </div>
   </section>`
       : `
@@ -376,13 +332,10 @@ Shift: 7:56 AM - 11:51 AM
       ${field('Non-work time (min)', input('transitMinutes', entry.transitMinutes, 'type="number" min="0" step="1" placeholder="0"'), 'Supply runs, wrong-item returns, lectures — excluded from active hours')}
       ${field('Working minutes inside lunch', input('lunchEmbeddedMinutes', entry.lunchEmbeddedMinutes, 'type="number" min="0" step="1" placeholder="0"'), 'Split out embedded tasks; log them as a phase')}
     </div>
-    <div class="timing-strip">
-      <span>Gross shift <strong>${formatDuration(shiftGross)}</strong></span>
-      <span>− eating <strong>${formatDuration(calc.timing.eatingMinutes)}</strong></span>
-      <span>− breaks <strong>${formatDuration(calc.timing.breakMinutes)}</strong>${calc.timing.breakEstimated && Number(entry.breakCount) > 0 ? ' <em>est.</em>' : ''}</span>
-      <span>− non-work <strong>${formatDuration(calc.timing.transitMinutes)}</strong></span>
-      <span class="net">= net work <strong>${formatDuration(calc.timing.netWorkMinutes)}</strong></span>
+    <div class="grid grid-4">
+      ${field('Known net work (min)', input('netWorkMinutesOverride', entry.netWorkMinutesOverride, 'type="number" min="0" step="1" placeholder="from shift"'), 'Already-computed net minutes; overrides the shift arithmetic above')}
     </div>
+    <div class="timing-strip">${stripHtml(entry, calc)}</div>
   </section>
 
   <section class="card">
@@ -486,7 +439,7 @@ function resultsTemplate(calc) {
         <span>${p.soilCode ? `${p.soilCode} · ${esc(soilName(p.soilCode))}` : '—'}</span>
         <span>${hm(p.netMinutes)}</span>
         <span class="meter"><span style="width:${((p.netMinutes / maxNet) * 100).toFixed(1)}%"></span></span>
-        <span title="${esc(p.metBasis || (p.metAuto ? '' : 'Entered by hand'))}"><span class="conf-dot conf-${p.metSource === 'bpm-note' || p.metSource === 'bpm-export' ? 'high' : p.metAuto ? p.metConfidence || 'medium' : 'manual'}"></span>MET ${num(p.met, 1)}</span>
+        <span title="${esc(p.metBasis || (p.metAuto ? '' : 'Entered by hand'))}"><span class="conf-dot conf-${p.metSource === 'bpm-note' || p.metSource === 'bpm-export' || p.metSource === 'summary' ? 'high' : p.metAuto ? p.metConfidence || 'medium' : 'manual'}"></span>MET ${num(p.met, 1)}</span>
       </div>
     </li>`).join('');
 
@@ -498,7 +451,7 @@ function resultsTemplate(calc) {
   return `
   <div class="result-grid">
     <div class="result-main">
-      <p class="eyebrow">${when} · Estimated TDEE</p>
+      <p class="eyebrow">${when} · Estimated TDEE${calc.unusable ? ' · <span class="pill unusable">Unusable — left out of Trends</span>' : ''}</p>
       <div class="hero-num xl">${kcal(calc.tdee)}<span class="unit">kcal</span></div>
       <p class="hero-note">±${DAY_UNCERTAINTY_KCAL.min}–${DAY_UNCERTAINTY_KCAL.max} kcal single-day precision</p>
 
@@ -515,7 +468,7 @@ function resultsTemplate(calc) {
         <ul class="legend-grid">
           ${COMPONENTS.map((c) => `<li data-comp="${c.key}"><span class="swatch" style="--sw:${c.color}"></span><span>${label(c)}${c.estimate ? ' <span class="est-tag">EST</span>' : ''}</span><strong>${kcal(calc.components[c.key])}</strong></li>`).join('')}
         </ul>
-        <div class="comp-readout" aria-live="polite"><p class="hint">Hover, tap or hold a segment to see its kcal, hours and heart rate.</p></div>
+        <div class="comp-readout" aria-live="polite"><p class="hint">Hover, tap or hold a segment to see its kcal, hours and MET.</p></div>
       </div>
     </div>
 
@@ -549,8 +502,6 @@ function resultsTemplate(calc) {
         </table>
       </details>` : ''}
 
-      ${hrBlock(calc)}
-
       <details class="side-block" data-key="quality" ${warnCount ? 'open' : ''}>
         <summary>Data quality <span class="meta">${warnCount ? `${warnCount} warning${warnCount === 1 ? '' : 's'}` : `${calc.flags.length} note${calc.flags.length === 1 ? '' : 's'}`}</span></summary>
         <ul class="flags">${flags}</ul>
@@ -565,24 +516,7 @@ let readoutCalc = null;
 
 const cell = (labelText, value, sub = '') => `<div><span class="mini-label">${labelText}</span><strong>${value}</strong>${sub ? `<span class="sub">${sub}</span>` : ''}</div>`;
 
-/** Heart rate behind the active line: measured if we have it, else what the MET implies. */
-function activeBpmCell(calc, settings) {
-  const d = calc.hr && calc.hr.day;
-  if (d && d.stats) {
-    return cell('Heart rate', `${d.stats.median} → ${d.correctedBpm}`, `watch → corrected · HRR ${Math.round(d.hrr * 100)}% · ${d.stats.n} readings`);
-  }
-  const logged = calc.phases.filter((p) => p.bpm && !p.bpm.fromExport).sort((a, b) => b.bpm.correctedBpm - a.bpm.correctedBpm)[0];
-  if (logged) {
-    return cell('Heart rate', `${logged.bpm.watchBpm} → ${logged.bpm.correctedBpm}`, `watch → corrected · HRR ${Math.round(logged.bpm.hrr * 100)}% · logged`);
-  }
-  const met = calc.restDay ? NON_WORK_DAY.walkingMet : calc.blendedMet;
-  const implied = met ? bpmForMet(met, settings.restingHr, settings.maxHr) : null;
-  if (!implied) return cell('Heart rate', '—', met ? `MET ${num(met, 1)} is below the HRR table` : 'no MET logged');
-  return cell('Heart rate', `~${implied.watch} → ${implied.corrected}`, `implied by MET ${num(met, 2)} · HRR ${Math.round(implied.hrr * 100)}% · no HR logged`);
-}
-
 function readoutHtml(key, calc) {
-  const settings = store.getSettings();
   const c = COMPONENTS.find((x) => x.key === key);
   const value = calc.components[key] || 0;
   const share = calc.tdee ? `${((value / calc.tdee) * 100).toFixed(1)}% of TDEE` : '';
@@ -591,13 +525,13 @@ function readoutHtml(key, calc) {
   if (key === 'bmr') {
     cells = cell('Hours', '24h 00m', 'all day, at rest')
       + cell('Rate', `${kcal(value / 24)} kcal/hr`, 'MET 1.0')
-      + cell('Heart rate', `~${settings.restingHr}`, 'resting baseline');
+      + cell('Basis', 'Fixed constant', 'measured, never recalculated per day');
   } else if (key === 'active') {
     const minutes = calc.restDay ? (calc.walking ? calc.walking.hours * 60 : 0) : calc.timing.netWorkMinutes;
     const worked = calc.phases.filter((p) => p.netMinutes > 0).length;
     cells = cell('Hours', formatDuration(minutes), calc.restDay ? `walking · MET ${NON_WORK_DAY.walkingMet}` : `net work · ${worked} phase${worked === 1 ? '' : 's'}`)
       + cell('Rate', minutes ? `${kcal(value / (minutes / 60))} kcal/hr` : '—', calc.restDay ? '' : calc.blendedMet ? `blended MET ${calc.blendedMet.toFixed(2)}` : 'no MET yet')
-      + activeBpmCell(calc, settings);
+      + cell('MET', calc.restDay ? num(NON_WORK_DAY.walkingMet, 1) : calc.blendedMet ? calc.blendedMet.toFixed(2) : '—', calc.restDay ? (calc.walking && calc.walking.given ? 'walking, kcal as imported' : 'walking pace') : 'blended by minutes, Intermediate model');
   } else if (key === 'neat') {
     const tier = NEAT_TIERS.find((t) => t.id === calc.neat.tier);
     cells = calc.restDay
@@ -636,7 +570,7 @@ function showComp(zone, key) {
   zone.querySelectorAll('[data-comp]').forEach((el) => el.classList.toggle('on', el.dataset.comp === key));
   zone.querySelector('.comp-readout').innerHTML = key
     ? readoutHtml(key, readoutCalc)
-    : '<p class="hint">Hover, tap or hold a segment to see its kcal, hours and heart rate.</p>';
+    : '<p class="hint">Hover, tap or hold a segment to see its kcal, hours and MET.</p>';
 }
 
 /** Hover (mouse), press/hold (touch) or keyboard focus on a segment or legend row. */
@@ -666,35 +600,6 @@ function wireReadout(host) {
   });
 }
 
-function hrBlock(calc) {
-  const hr = calc.hr;
-  if (!hr) return '';
-  const s = hr.dayStats;
-  const d = hr.day;
-  const verdictText = !d ? 'too few readings in the shift'
-    : d.verdict === 'validates' ? 'agrees'
-      : d.verdict === 'revise-up' ? `suggests higher (~${d.suggestedMet})`
-        : d.verdict === 'revise-down' ? `suggests lower (~${d.suggestedMet})`
-          : 'near resting';
-  const rows = calc.phases.filter((p) => p.bpm && p.bpm.fromExport).map((p) => `
-    <tr><td>${esc(p.description || 'Untitled phase')}<span class="sub">${esc(p.start)}–${esc(p.end)} · median ${p.bpm.stats.median} · HRR ${Math.round(p.bpm.hrr * 100)}%</span></td>
-      <td class="num">${p.bpm.implied ? `${p.bpm.implied.metMin}–${(p.bpm.impliedMax || p.bpm.implied).metMax}` : '—'}<span class="sub">logged ${num(p.met, 1)}</span></td></tr>`).join('');
-  return `
-      <details class="side-block" data-key="hr" open>
-        <summary>Heart rate <span class="meta">${d ? verdictText : `${hr.readings} readings`}</span></summary>
-        ${s && s.n ? `
-        <table class="mini-table">
-          <tbody>
-            <tr><td>Work window<span class="sub">${s.n} readings · median ${s.median} · 90th pct ${s.p90} · peak ${s.peak}${s.exercising ? ` · ${s.exercising} Exercising` : ''}</span></td>
-              <td class="num">${d && d.implied ? `MET ${d.implied.metMin}–${(d.impliedMax || d.implied).metMax}` : '—'}<span class="sub">${d ? `HRR ${Math.round(d.hrr * 100)}%` : ''}</span></td></tr>
-            <tr><td>Logged, blended by minutes</td><td class="num">${calc.blendedMet === null ? '—' : `MET ${calc.blendedMet.toFixed(2)}`}</td></tr>
-            ${rows}
-          </tbody>
-        </table>
-        ${hrApplyButton(d, 'data-action="apply-hr-day"', 'Use for every phase: MET')}` : '<p class="side-empty">No readings inside the shift window.</p>'}
-      </details>`;
-}
-
 export function refreshResults() {
   const host = document.getElementById('results');
   if (!host || !draft) return null;
@@ -704,7 +609,7 @@ export function refreshResults() {
   readoutCalc = calc;
   shownComp = null;
   // Keep the reader's expanded/collapsed choice across live recalculation —
-  // by name, since sections come and go (the heart-rate block, for one).
+  // by name, since sections come and go (model comparison and data quality).
   host.querySelectorAll('details[data-key]').forEach((d) => {
     if (open.has(d.dataset.key)) d.open = open.get(d.dataset.key);
   });
@@ -719,7 +624,7 @@ export function refreshResults() {
   return calc;
 }
 
-/** The engine takes an explicit weight and the day's heart-rate readings. */
+/** The engine takes an explicit weight: the one in effect that day. */
 function withResolvedWeight(entry) {
   return store.resolveEntry(entry);
 }
@@ -748,15 +653,6 @@ export function render(root) {
   wireReadout(root.querySelector('#results'));
   // "+ Add phase" in the result summary lives outside the form.
   root.querySelector('#results').addEventListener('click', (e) => {
-    const applyDay = e.target.closest('[data-action="apply-hr-day"]');
-    if (applyDay) {
-      const met = Number(applyDay.dataset.met);
-      for (const phase of draft.phases) if (phase.description || phase.met !== '') applyHrMet(phase, met, 'day-level work-window check, applied to every phase so the day blends to it');
-      markDirty();
-      rebuildForm(form);
-      toast(`Revised ${applyDay.dataset.verdict === 'revise-down' ? 'down' : 'up'} to MET ${met} from heart rate.`);
-      return;
-    }
     if (!e.target.closest('[data-action="add-phase"]')) return;
     draft.phases.push(store.newPhase());
     markDirty();
@@ -830,14 +726,7 @@ function onFieldEvent(e, form) {
 function refreshSuggestionsAndHints(form) {
   const calc = calculateDay(withResolvedWeight(draft), store.getSettings());
   const strip = form.querySelector('.timing-strip');
-  if (strip) {
-    strip.innerHTML = `
-      <span>Gross shift <strong>${formatDuration(durationMinutes(draft.shiftStart, draft.shiftEnd))}</strong></span>
-      <span>− eating <strong>${formatDuration(calc.timing.eatingMinutes)}</strong></span>
-      <span>− breaks <strong>${formatDuration(calc.timing.breakMinutes)}</strong>${calc.timing.breakEstimated && Number(draft.breakCount) > 0 ? ' <em>est.</em>' : ''}</span>
-      <span>− non-work <strong>${formatDuration(calc.timing.transitMinutes)}</strong></span>
-      <span class="net">= net work <strong>${formatDuration(calc.timing.netWorkMinutes)}</strong></span>`;
-  }
+  if (strip) strip.innerHTML = stripHtml(draft, calc);
 }
 
 /**
@@ -852,7 +741,7 @@ function refreshSuggestionsAndHints(form) {
 function metSummary(report) {
   if (!report.phases) return '';
   const parts = [`MET set automatically for ${report.phases} phase${report.phases === 1 ? '' : 's'}`];
-  if (report.fromNotes) parts.push(`${report.fromNotes} from BPM-confirmed notes`);
+  if (report.fromNotes) parts.push(`${report.fromNotes} from revisions in the day's notes`);
   if (report.low) parts.push(`${report.low} low-confidence`);
   if (report.needsMet) parts.push(`${report.needsMet} with no match (enter by hand)`);
   if (report.excludedMinutes) parts.push(`${report.excludedMinutes} min of non-labor time excluded`);
@@ -943,61 +832,62 @@ function handleBulkImport(text, filename, form) {
 }
 
 /**
- * Stores a Samsung Health heart-rate export by date and reports, day by day,
- * whether corrected HR → HRR agrees with each logged day's MET (§4, §5).
- * The readings live apart from day entries, so every check stays live as
- * shift or phase times are edited, and survives a calendar re-import.
+ * Imports a day-by-day TDEE table. Every row becomes a day the engine
+ * computes; the file's own TDEE is only used to check the result, and any day
+ * where the two disagree is listed rather than silently accepted.
  */
-function handleHeartRateImport(readings, filename, form) {
-  const byDate = groupByDate(readings);
-  store.saveHeartRate(byDate);
-  const dates = Object.keys(byDate).sort();
+function handleSummaryImport(text, filename, form) {
+  const { days, skipped, duplicates, headerless } = parseSummaryTable(text, { filename });
+  if (!days.length) {
+    toast('No rows with a readable date were found — check the date column.', 'warn');
+    return;
+  }
   const settings = store.getSettings();
-  const counts = { agree: 0, up: 0, down: 0, other: 0, unlogged: 0 };
-  const lines = [];
-  for (const date of dates) {
-    const entry = store.getState().entries[date];
-    const head = `${date} · ${byDate[date].length} readings`;
-    if (!entry) {
-      counts.unlogged += 1;
-      lines.push(`${head} — no logged day; stored for when one is added.`);
-      continue;
+  const counts = { work: 0, rest: 0, unusable: 0 };
+  const mismatches = [];
+  let replaced = 0;
+  let checked = 0;
+  for (const day of days) {
+    const existing = store.getEntry(day.date);
+    const entry = {
+      ...store.newEntry(day.date),
+      ...day.patch,
+      phases: day.patch.phases.map((p) => ({ ...store.newPhase(), ...p })),
+    };
+    if (existing) {
+      replaced += 1;
+      // Keep what a richer import (the calendar's own text) said about the day,
+      // but don't stack copies of this file's notes on every re-import.
+      if (existing.source !== 'summary' && existing.notes) entry.notes = `${entry.notes}\n\n--- previous notes ---\n${existing.notes}`.slice(0, 12000);
     }
-    if (entry.restDay) {
-      counts.other += 1;
-      lines.push(`${head} — non-work day; stored (a uni-day HR reference for §7).`);
-      continue;
-    }
-    const calc = calculateDay(store.resolveEntry(entry), settings);
-    const d = calc.hr && calc.hr.day;
-    const s = calc.hr && calc.hr.dayStats;
-    if (!d) {
-      counts.other += 1;
-      lines.push(`${head} — ${s && s.n ? `only ${s.n} inside the shift` : 'none inside the shift window'}; no check.`);
-      continue;
-    }
-    const band = d.implied ? `MET ${d.implied.metMin}–${(d.impliedMax || d.implied).metMax}` : 'below the table floor';
-    const verdict = d.verdict === 'validates' ? 'AGREES'
-      : d.verdict === 'revise-up' ? `REVISE UP → ~${d.suggestedMet}`
-        : d.verdict === 'revise-down' ? `REVISE DOWN → ~${d.suggestedMet}`
-          : 'NEAR RESTING — check shift times';
-    counts[d.verdict === 'validates' ? 'agree' : d.verdict === 'revise-up' ? 'up' : d.verdict === 'revise-down' ? 'down' : 'other'] += 1;
-    lines.push(`${head} — work window median ${s.median} bpm (p90 ${s.p90}, peak ${s.peak}) → corrected ${d.correctedBpm} → HRR ${Math.round(d.hrr * 100)}% → ${band}; logged blended MET ${calc.blendedMet === null ? '—' : calc.blendedMet.toFixed(2)} — ${verdict}`);
-    for (const p of calc.phases) {
-      if (!p.bpm || !p.bpm.fromExport) continue;
-      lines.push(`    ${p.start}–${p.end} ${p.description}: median ${p.bpm.stats.median} → HRR ${Math.round(p.bpm.hrr * 100)}% → ${p.bpm.implied ? `MET ${p.bpm.implied.metMin}–${(p.bpm.impliedMax || p.bpm.implied).metMax}` : 'below floor'}; logged ${p.met}`);
+    store.saveEntry(entry, { logWeight: false });
+    counts[day.kind] += 1;
+    if (day.fileTdee !== null && day.kind !== 'unusable') {
+      checked += 1;
+      const calc = calculateDay(store.resolveEntry(entry), settings);
+      if (Math.abs(calc.tdee - day.fileTdee) > 2) mismatches.push(`  ${day.date}: app ${kcal(calc.tdee)} vs file ${kcal(day.fileTdee)}`);
     }
   }
-  const summary = `${readings.length} readings across ${dates.length} day${dates.length === 1 ? '' : 's'} (${dates[0]} to ${dates.at(-1)}). `
-    + `${counts.agree} agree, ${counts.up} suggest higher, ${counts.down} suggest lower`
-    + `${counts.other ? `, ${counts.other} not checkable` : ''}${counts.unlogged ? `, ${counts.unlogged} with no logged day` : ''}.`;
-  openTextPanel({
-    title: 'Heart rate vs MET',
-    hint: `From ${filename}. Watch BPM → +30/+35 correction → HRR = (corrected − 49) / 152 → MET band, against each day's minute-blended MET. Revisions run both directions; open a day to apply one.`,
-    text: `${summary}\n\n${lines.join('\n')}`,
-  });
-  toast(summary, counts.up || counts.down ? 'warn' : 'ok');
+
+  const range = days.length > 1 ? ` (${days[0].date} to ${days.at(-1).date})` : ` (${days[0].date})`;
+  toast(`Imported ${days.length} day${days.length === 1 ? '' : 's'}${range}: ${counts.work} work, ${counts.rest} non-work${counts.unusable ? `, ${counts.unusable} unusable (left out of Trends)` : ''}.`);
+  if (checked) {
+    toast(mismatches.length
+      ? `${mismatches.length} of ${checked} days don’t match the file’s TDEE — see the summary.`
+      : `TDEE recomputed for all ${checked} usable days — every one matches the file.`, mismatches.length ? 'warn' : 'ok');
+  }
+  if (mismatches.length || skipped.length || duplicates.length) {
+    const lines = [`Read ${days.length + skipped.length + duplicates.length} rows from ${filename}${headerless ? ' (no header row — read in the app’s export column order)' : ''}.`];
+    if (mismatches.length) lines.push('', 'The app’s TDEE differs from the file’s by more than 2 kcal on:', ...mismatches, 'Usually a column the app doesn’t use (for example a different BMR) or a rounded MET.');
+    if (duplicates.length) lines.push('', `${duplicates.length} date(s) appeared more than once; the last row was kept: ${[...new Set(duplicates)].join(', ')}`);
+    if (skipped.length) lines.push('', 'Skipped (no readable date):', ...skipped.map((r) => `  line ${r.line}: ${r.reason}`));
+    openTextPanel({ title: 'Import summary', hint: 'What happened to each row that didn’t import cleanly.', text: lines.join('\n') });
+  }
+  if (replaced) toast(`${replaced} day${replaced === 1 ? ' was' : 's were'} already in the app and ${replaced === 1 ? 'was' : 'were'} replaced; earlier calendar notes are kept in Notes.`);
+
+  loadDate(days.at(-1).date);
   rebuildForm(form);
+  location.hash = 'history';
 }
 
 /**
@@ -1021,6 +911,9 @@ async function handleImportFile(e, form) {
       const buffer = await file.arrayBuffer();
       const { extractPdfText } = await import('../pdfText.js');
       text = await extractPdfText(buffer);
+    } else if (ext === 'xlsx' || ext === 'xls' || ext === 'numbers' || ext === 'ods') {
+      toast('Spreadsheet files can’t be read directly. Save the sheet as CSV (File → Download → .csv), or copy its rows and use “Paste text”.', 'warn');
+      return;
     } else {
       text = await file.text();
       if (ext === 'html' || ext === 'htm' || /^\s*<(!doctype|html)/i.test(text)) text = htmlToText(text);
@@ -1038,14 +931,11 @@ async function handleImportFile(e, form) {
 
 /** Everything after the text is in hand — a picked file and pasted text both end up here. */
 function importText(text, filename, form) {
-  // A heart-rate export has readings and no calendar "Shift:" line.
-  if (!/^[ \t]*shift[ \t]*:/im.test(text)) {
-    const readings = parseHeartRateText(text, { year: Number(draft.date.slice(0, 4)) });
-    if (readings.length >= 5) {
-      flushSave();
-      handleHeartRateImport(readings, filename, form);
-      return;
-    }
+  // A day-by-day TDEE table (CSV, or rows copied from a spreadsheet).
+  if (looksLikeSummaryTable(text)) {
+    flushSave();
+    handleSummaryImport(text, filename, form);
+    return;
   }
 
   // Land any unsaved edit before imported days are written, so a pending
@@ -1098,7 +988,7 @@ function onClick(e, form) {
   if (action === 'import-paste') {
     openPastePanel({
       title: 'Paste calendar text',
-      hint: 'Paste one day or many (separate days with a line of ---). Works anywhere a file picker doesn’t, such as inside a phone app.',
+      hint: 'Paste calendar text (one day or many, separated by ---), or rows copied from your TDEE spreadsheet or CSV — include the header row if you have it. Works anywhere a file picker doesn’t, such as inside a phone app.',
       submit: 'Import',
       onSubmit: (text) => importText(text, 'pasted text', form),
     });
@@ -1112,13 +1002,6 @@ function onClick(e, form) {
     if (draft.phases.length === 0) draft.phases.push(store.newPhase());
     markDirty();
     rebuildForm(form);
-  } else if (action === 'apply-hr-met') {
-    const phase = draft.phases.find((p) => p.id === e.target.dataset.phase);
-    if (phase) {
-      applyHrMet(phase, Number(e.target.dataset.met), `this phase's ${phase.start}–${phase.end} window`);
-      markDirty();
-      rebuildForm(form);
-    }
   } else if (action === 'apply-met') {
     const phase = draft.phases.find((p) => p.id === e.target.dataset.phase);
     if (phase) {

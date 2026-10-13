@@ -26,9 +26,9 @@ too (`npx serve`, `python3 -m http.server`).
 npm test          # or: node --test "tests/**/*.test.mjs"
 ```
 
-58 tests covering the calculation engine — model selection, the three kcal formulas, net work
-time, phase allocation, BPM correction and HRR, MET suggestion, the estimated lines, full-day
-totals and trend aggregation. No dependencies; uses Node's built-in test runner.
+Tests cover the calculation engine — the kcal formulas, net work time, phase allocation, MET
+suggestion, the estimated lines, full-day totals and trend aggregation — plus the calendar and
+TDEE-table importers, the MET glossary and the sync merge rules. No dependencies; uses Node's built-in test runner.
 
 ## How the calculation works
 
@@ -63,38 +63,36 @@ history table — because they're the lowest-confidence lines in the framework.
 count, 8,500 steps ≈ 1.4 hr when blank) + ~95 general-day NEAT + ~200 TEF, with no background
 bucket — ~1,950 kcal, still unvalidated.
 
-**BPM cross-check (§5).** Runs both directions: a corrected HRR below the task MET is a
-`revise-down` verdict with the same warning weight as `revise-up`.
+**No watch heart-rate framework.** The BPM correction / HRR cross-check, the heart-rate export
+import, per-phase watch BPM and the Samsung capture-rate check were removed. MET comes from the
+calendar text (glossary), a revision written in the day's NOTE line, an imported TDEE table, or
+by hand.
 
 **Reconciling with the document (§6, §12).** Days listed in DILIGENT IV's hand-computed dataset
 show the document's figure and the difference in their data-quality panel (a warning past
 ±300 kcal), and the CSV export carries a `diligent_iv_tdee` column. The importer also flags the
 §8 standing problems it can see in calendar text: a `"half."` title, a start_time inside the
-logged lunch or before 4 AM, an empty `1.)` task item, and a downward BPM revision.
-
-**Heart-rate exports (§4, §5).** *Import from file* also takes a Samsung Health heart-rate
-export as `.html` or `.pdf` (any file with readings and no `Shift:` line). Readings are stored by
-date, apart from day entries, so they survive a calendar re-import and every check stays live as
-shift or phase times change. Each logged day's work window (shift minus lunch), and each phase
-with a start/end, is summarized as a time-weighted median — dense sampling during a tagged
-workout doesn't dominate it — then corrected (+30/+35), turned into HRR = (corrected − 49) / 152,
-mapped to the MET band and compared with the minute-blended MET. A disagreement in either
-direction is a warning with a one-click revision (to the band midpoint, in half-MET steps) that
-records which way it went. After import, a copyable report lists every day's verdict.
-
-The parser works line by line (a table row or line with a clock time and a heart rate, dated by
-the nearest date above it), so it has only been checked against synthetic exports in the
-layouts Samsung is likely to use — `tests/fixtures/sample-hr-export.html` — not a real one yet.
+logged lunch or before 4 AM, an empty `1.)` task item, and a downward MET revision.
 
 **Motion.** Every tab's blocks fade up into place when it opens or as they scroll into view.
 On Trends, the TDEE chart rises from a flat line to each day's value (on every range switch),
 the allocation bar sweeps in, sparklines draw themselves and weekly candles grow once their
 panel is on screen. On Daily entry, hovering (or tapping/holding on touch, or focusing) a
-segment or legend row of the TDEE breakdown shows that line's kcal, share, hours, rate and heart
-rate — measured from an HR export when there is one, otherwise what the day's MET implies
-through the §4 chain run backwards. All of it is off under `prefers-reduced-motion`.
+segment or legend row of the TDEE breakdown shows that line's kcal, share, hours, rate and MET. All of it is off under `prefers-reduced-motion`.
 
-**Sync across devices.** Inside the artifact, every day, heart-rate day, weight log and the
+**Day-by-day TDEE tables (CSV or a spreadsheet paste).** *Import from file* takes a `.csv`, and
+*Paste text* takes rows copied straight out of Google Sheets or Excel (tab-separated, `TRUE`/
+`FALSE`, `6/1/2026` dates, `3,000`-style numbers), with or without the header row — the app's own
+*Export CSV* format is the reference, so an export can always come back in. Each row becomes a
+day the engine computes itself: one phase at the MET that reproduces the row's active kcal
+(`active ÷ (kg × hrs) + 1`), its net work minutes as *Known net work*, NEAT / TEF / background as
+given, and on a non-work row the walking kcal as given. The file's own TDEE is used only to check
+the result — the import reports whether every usable day matches (within 2 kcal) and lists any
+that don't. A row with no TDEE and no work, or flagged UNUSABLE, is kept and marked **Unusable**:
+listed in History, left out of Trends and every average. The row's bodyweight stays on the day
+and is not added to the weight log. See `src/summaryImport.js` and `tests/summaryImport.test.mjs`.
+
+**Sync across devices.** Inside the artifact, every day, the weight log and the
 settings are saved as small documents in the signed-in person's *private* database area
 (`data/users/<id>/…` — unreadable even to people the page is shared with). `localStorage`
 stays the working copy, so the app opens instantly and works offline; `src/sync.js` reconciles
@@ -107,7 +105,7 @@ device / Not saved* (the last when the browser blocks or fills local storage).
 
 **Importing on a phone.** The file picker is a `<label>` with no file-type filter (Android and
 iOS grey out `.md` files when an `accept` list names them), and *Paste text* takes the same
-calendar or heart-rate text where a picker doesn't work at all, such as some in-app browsers.
+calendar text or TDEE-table rows where a picker doesn't work at all, such as some in-app browsers.
 Day splitting accepts `---`, `***`, `___`, `===` and spaced-dash rules, CRLF and a BOM, and still
 starts a new day at every `Date:` line if a rule is missing. When a file yields fewer days than
 blocks, an *Import summary* names the repeated dates (the replaced block is kept in Notes) and
@@ -132,8 +130,9 @@ the weight that was actually in effect. A per-entry fasted-morning weight also w
 | — | Calendar-log import (.md/.txt/.pdf) — fills known fields, leaves the rest blank | ✅ |
 | §12.6 | Trend view — TDEE, weight, work vs rest, rolling 7-day | ✅ |
 | §12.7 | Multi-site / multi-phase splitting with independent MET/model/time | ✅ |
-| §12.8 | BPM/HRR calculator with correction factors and implied MET | ✅ |
-| §12.9 | Samsung Health screenshot OCR | ❌ enter active minutes per phase by hand |
+| §12.8 | BPM/HRR calculator | ✖ removed at the user's request |
+| §12.9 | Samsung Health screenshot OCR | ✖ not built |
+| — | Day-by-day TDEE table import (.csv or pasted spreadsheet rows), reconciled row by row | ✅ |
 | §12.10 | MyFitnessPal-style food log | ⚠️ single daily intake field for deficit/surplus + TEF |
 | §12.11 | Model comparison display with the used model flagged | ✅ |
 | §12.12 | Data-quality flags | ✅ |
@@ -142,10 +141,10 @@ The two stretch goals (§12.9 OCR, §12.10 full food-log integration) are not bu
 either an OCR pipeline or a third-party API, neither of which fits a dependency-free local app.
 The manual fields cover the same inputs.
 
-Data-quality flags fire on: missing BPM data, capture-rate mismatches against the §7 expected
-bands, inferential (undocumented) heat triggers, estimated break time, phase windows that don't
-reconcile with the shift, deductions exceeding the shift length, missing bodyweight, manual model
-overrides, and BPM readings implying a higher MET than the task assignment.
+Data-quality flags fire on: inferential (undocumented) heat triggers, estimated break time, phase
+windows that don't reconcile with the shift, deductions exceeding the shift length, missing
+bodyweight, shifts with no task description, unusable days, KRI restatements, and the DILIGENT IV
+§6 figure for a date when it differs from the app's.
 
 ## Calendar-log import
 
@@ -172,7 +171,7 @@ MET), wheelbarrow / pickaxe / machete / rush / incline deltas, dingo machine-vs-
 and the 3.5–9.0 sanity clamp. Each phase records its reasoning and a confidence level. The
 importer also reads relative times ("Beginning", "after lunch", "end shift"), "Arrived 1:45 … left
 4:23" windows (AM/PM inferred from the shift), job-title bullets ("Patio job"), post-shift lunches,
-and excludes non-labor blocks (wrong-item returns, lectures) from active time. A BPM-confirmed
+and excludes non-labor blocks (wrong-item returns, lectures) from active time. A MET
 revision written in a day's NOTE ("revised to MET 7.5", "Blended MET 7.12") overrides the
 task-based estimate, and a MET typed by hand always wins. Covered by `tests/metGlossary.test.mjs`.
 
@@ -202,7 +201,9 @@ src/
   charts.js           hand-rolled SVG charts
   ui.js               formatting helpers
   app.js              tab routing
-  views/              log, history, trends, tools (HRR), reference, settings
+  summaryImport.js    day-by-day TDEE tables (CSV / spreadsheet paste)
+  sync.js             cross-device sync through the artifact database
+  views/              log, history, trends, reference, settings
 tests/engine.test.mjs
 ```
 
@@ -213,8 +214,6 @@ edit `src/data.js` — nothing is hard-coded in the views.
 
 - MET values are population averages. Single-day precision is roughly **±300–500 kcal** — shown
   under the TDEE figure on every day.
-- BPM correction factors (+30/+35) come from a small number of manual pulse checks, not a
-  validated device. HRR-derived MET is directional confirmation, not ground truth.
 - NEAT and background are low-confidence estimates, visually distinguished from active kcal.
 - Body composition is not tracked — the Scale MD Pro trunk/arm electrodes are non-functional.
   DEXA recommended as ground truth.

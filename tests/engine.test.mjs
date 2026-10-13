@@ -6,13 +6,9 @@ import {
   MODEL,
   activeKcal,
   allocatePhaseMinutes,
-  bpmCorrection,
   calculateDay,
-  captureRateCheck,
   computeNetWorkMinutes,
   durationMinutes,
-  hrrPercent,
-  metFromHrr,
   modelOffset,
   parseTime,
   rollingAverage,
@@ -21,9 +17,7 @@ import {
   suggestNeatTier,
   suggestTef,
   summarizeTrends,
-  validateWithBpm,
   walkingKcal,
-  bpmForMet,
 } from '../src/engine.js';
 
 const SETTINGS = { bmr: 1436, breakMinutesDefault: 11, restingHr: 49, maxHr: 201, weightKg: 57.6 };
@@ -207,81 +201,6 @@ describe('§5/§8 phase time allocation', () => {
   });
 });
 
-describe('§6 BPM correction and HRR', () => {
-  it('applies the documented correction bands', () => {
-    assert.equal(bpmCorrection(100).add, 30);
-    assert.equal(bpmCorrection(140).add, 35);
-    const nearMax = bpmCorrection(165);
-    assert.equal(nearMax.add, 35);
-    assert.equal(nearMax.addMax, 50);
-  });
-
-  it('applies no correction outside the documented bands', () => {
-    assert.equal(bpmCorrection(60).add, 0);
-    assert.equal(bpmCorrection(190).add, 0);
-  });
-
-  it('computes HRR% against the 49/201 baseline', () => {
-    close(hrrPercent(125), (125 - 49) / 152, 0.0001);
-    close(hrrPercent(49), 0, 0.0001);
-  });
-
-  it('maps HRR% to the reference MET bands', () => {
-    assert.deepEqual(
-      { metMin: metFromHrr(0.5).metMin, metMax: metFromHrr(0.5).metMax },
-      { metMin: 5.5, metMax: 6.5 },
-    );
-    assert.equal(metFromHrr(0.6).metMin, 6.5);
-    assert.equal(metFromHrr(0.9).metMax, 12.0);
-    assert.equal(metFromHrr(0.2), null);
-  });
-
-  it('validates a task MET the corrected BPM supports', () => {
-    // watch 130 → +35 → 165 → HRR (165−49)/152 = 76% → MET 8.5–9.5
-    const r = validateWithBpm({ watchBpm: 130, taskMet: 9.0 });
-    assert.equal(r.correctedBpm, 165);
-    close(r.hrr, 0.7632, 0.001);
-    assert.equal(r.verdict, 'validates');
-  });
-
-  it('flags a task MET the BPM says is too low', () => {
-    const r = validateWithBpm({ watchBpm: 130, taskMet: 5.0 });
-    assert.equal(r.verdict, 'revise-up');
-    assert.match(r.message, /Revise task MET upward/);
-  });
-
-  it('revises downward when BPM reads lower — the cross-check runs both directions', () => {
-    const r = validateWithBpm({ watchBpm: 95, taskMet: 9.0 });
-    assert.equal(r.verdict, 'revise-down');
-    assert.match(r.message, /downward from 9/);
-  });
-
-  it('flags a downward BPM disagreement as prominently as an upward one', () => {
-    const calc = calculateDay({
-      date: '2026-09-05', shiftStart: '07:00', shiftEnd: '15:00', weightKg: 57.6,
-      phases: [{ id: 'a', description: 'paver install', met: 9.0, watchBpm: 95 }],
-    }, SETTINGS);
-    assert.ok(calc.flags.some((f) => f.level === 'warn' && /downward from 9/.test(f.text)));
-  });
-});
-
-describe('§7 capture rate', () => {
-  it('accepts a rate inside the expected band', () => {
-    const c = captureRateCheck({ samsungActiveMinutes: 240, netWorkMinutes: 400, captureCategory: 'digging' });
-    close(c.rate, 0.6);
-    assert.equal(c.status, 'expected');
-  });
-
-  it('flags a rate far below the expected band', () => {
-    const c = captureRateCheck({ samsungActiveMinutes: 100, netWorkMinutes: 400, captureCategory: 'highStep' });
-    assert.equal(c.status, 'low');
-  });
-
-  it('returns nothing without a Samsung reading', () => {
-    assert.equal(captureRateCheck({ samsungActiveMinutes: '', netWorkMinutes: 400, captureCategory: 'digging' }), null);
-  });
-});
-
 describe('§5 MET suggestion', () => {
   it('matches task keywords', () => {
     const s = suggestMet('wet sod wheelbarrow to the back slope');
@@ -444,11 +363,6 @@ describe('§1 full-day calculation', () => {
     assert.ok(calc.flags.some((f) => /inferred, not documented/.test(f.text)));
   });
 
-  it('flags a day with no BPM data', () => {
-    const calc = calculateDay(baseDay, SETTINGS);
-    assert.ok(calc.flags.some((f) => /No BPM data/.test(f.text)));
-  });
-
   it('flags an untimed phase mixed in with timed siblings, and does not zero its kcal', () => {
     const day = {
       ...baseDay,
@@ -527,21 +441,23 @@ describe('§12.6 trends', () => {
   });
 });
 
-describe('MET → implied heart rate (the §4 chain run backwards)', () => {
-  it('round-trips: the implied watch BPM validates the MET it came from', () => {
-    for (const met of [5.0, 6.0, 7.0, 8.0, 9.0]) {
-      const b = bpmForMet(met);
-      assert.equal(validateWithBpm({ watchBpm: b.watch, taskMet: met }).verdict, 'validates', `MET ${met} → watch ${b.watch}`);
-    }
+describe('summary rows (an imported TDEE table)', () => {
+  it('uses known net work minutes in place of the shift arithmetic', () => {
+    const t = computeNetWorkMinutes({ shiftStart: '07:00', shiftEnd: '15:00', breakCount: 4, netWorkMinutesOverride: 196 }, 10);
+    assert.equal(t.netWorkMinutes, 196);
+    assert.equal(t.fromSummary, true);
   });
 
-  it('puts Sept 5 (MET 6.0) near the documented corrected ~120 / HRR ~47%', () => {
-    const b = bpmForMet(6.0);
-    assert.ok(b.corrected >= 115 && b.corrected <= 130, `corrected ${b.corrected}`);
-    assert.ok(b.hrr > 0.45 && b.hrr < 0.55);
+  it('takes a non-work day\'s walking kcal as given', () => {
+    const calc = calculateDay({ date: '2026-06-07', restDay: true, walkingKcal: 200, neatKcal: 100, tefKcal: 210, backgroundKcal: 0, weightKg: 57.6, phases: [] }, SETTINGS);
+    assert.equal(calc.components.active, 200);
+    close(calc.tdee, 1946, 0.001);
+    assert.ok(calc.walking.given);
   });
 
-  it('returns null below the HRR table', () => {
-    assert.equal(bpmForMet(3.3), null);
+  it('marks an unusable day and says it is left out', () => {
+    const calc = calculateDay({ date: '2026-07-09', unusable: true, phases: [], weightKg: 57.6 }, SETTINGS);
+    assert.equal(calc.unusable, true);
+    assert.ok(calc.flags.some((f) => f.level === 'error' && /left out of Trends/.test(f.text)));
   });
 });

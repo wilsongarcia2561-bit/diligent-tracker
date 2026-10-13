@@ -7,8 +7,6 @@ import {
   BMR_KCAL,
   DEFAULT_BREAK_MINUTES,
   DEFAULT_WEIGHT_KG,
-  MAX_HR,
-  RESTING_HR,
   SEED_WEIGHT_LOG,
 } from './data.js';
 
@@ -17,8 +15,6 @@ const KEY = 'diligent3.v1';
 export const DEFAULT_SETTINGS = {
   bmr: BMR_KCAL,
   breakMinutesDefault: DEFAULT_BREAK_MINUTES,
-  restingHr: RESTING_HR,
-  maxHr: MAX_HR,
   weightKg: DEFAULT_WEIGHT_KG,
 };
 
@@ -28,17 +24,20 @@ function emptyState() {
     settings: { ...DEFAULT_SETTINGS },
     entries: {},
     weightLog: SEED_WEIGHT_LOG.map((w) => ({ ...w })),
-    // Heart-rate readings by date, kept apart from entries so re-importing a
-    // calendar log never throws them away.
-    heartRate: {},
     // When each synced item last changed on this device: key → { at, del? }.
-    // Keys: e:<date> a day, h:<date> its heart-rate readings, w the weight log,
-    // s the settings. `del` marks a deletion so it can travel to other devices.
+    // Keys: e:<date> a day, w the weight log, s the settings. `del` marks a
+    // deletion so it can travel to other devices.
     sync: {},
   };
 }
 
 let state = emptyState();
+
+/** Saved settings minus anything the app no longer uses (the old HRR baselines). */
+function cleanSettings(saved) {
+  const { restingHr, maxHr, ...rest } = saved || {};
+  return { ...DEFAULT_SETTINGS, ...rest };
+}
 const listeners = new Set();
 const EPOCH = '1970-01-01T00:00:00.000Z';
 
@@ -66,7 +65,8 @@ function migrateSync() {
   for (const [date, entry] of Object.entries(state.entries)) {
     state.sync[`e:${date}`] ||= { at: entry.updatedAt || EPOCH };
   }
-  for (const date of Object.keys(state.heartRate || {})) state.sync[`h:${date}`] ||= { at: EPOCH };
+  // Heart-rate readings belonged to the retired BPM/HRR framework.
+  for (const key of Object.keys(state.sync)) if (key.startsWith('h:')) delete state.sync[key];
   if (!state.sync.w && JSON.stringify(state.weightLog) !== JSON.stringify(SEED_WEIGHT_LOG)) state.sync.w = { at: EPOCH };
   if (!state.sync.s && JSON.stringify({ ...state.settings, weightKg: 0 }) !== JSON.stringify({ ...DEFAULT_SETTINGS, weightKg: 0 })) state.sync.s = { at: EPOCH };
 }
@@ -79,12 +79,12 @@ export function load() {
       state = {
         ...emptyState(),
         ...parsed,
-        settings: { ...DEFAULT_SETTINGS, ...(parsed.settings || {}) },
+        settings: cleanSettings(parsed.settings),
         entries: parsed.entries || {},
         weightLog: parsed.weightLog || [],
-        heartRate: parsed.heartRate || {},
         sync: parsed.sync || {},
       };
+      delete state.heartRate;
     }
   } catch (err) {
     console.error('Could not read saved data; starting fresh.', err);
@@ -143,9 +143,6 @@ export function newPhase(overrides = {}) {
     start: '',
     end: '',
     netMinutesOverride: '',
-    captureCategory: '',
-    watchBpm: '',
-    samsungActiveMinutes: '',
     metRevisionNote: '',
     ...overrides,
   };
@@ -193,12 +190,14 @@ export function listEntries() {
   return Object.values(state.entries).sort((a, b) => b.date.localeCompare(a.date));
 }
 
-export function saveEntry(entry) {
+export function saveEntry(entry, { logWeight = true } = {}) {
   const at = nowIso();
   state.entries[entry.date] = { ...entry, updatedAt: at };
   touch(`e:${entry.date}`, { at });
   // §4 — a per-entry fasted-morning weight also updates the weight log.
-  if (entry.weightKg !== '' && entry.weightKg !== null && Number(entry.weightKg) > 0) {
+  // An imported summary row carries the weight it was computed with; that is
+  // not a new weigh-in, so it stays on the day and out of the weight log.
+  if (logWeight && entry.weightKg !== '' && entry.weightKg !== null && Number(entry.weightKg) > 0) {
     upsertWeight({ date: entry.date, kg: Number(entry.weightKg), note: 'From daily entry' }, { silent: true });
   }
   persist();
@@ -247,27 +246,9 @@ export function weightForDate(date) {
   return all.length ? all[0].kg : state.settings.weightKg;
 }
 
-/* ------------------------------ heart rate ----------------------------- */
-
-/** Store readings per date; a date present in the new export replaces what was there. */
-export function saveHeartRate(byDate) {
-  state.heartRate = { ...(state.heartRate || {}), ...byDate };
-  for (const date of Object.keys(byDate)) touch(`h:${date}`);
-  persist();
-}
-
-export function heartRateForDate(date) {
-  return (state.heartRate && state.heartRate[date]) || [];
-}
-
-export function heartRateDates() {
-  return Object.keys(state.heartRate || {}).sort();
-}
-
-/** An entry with everything the engine needs resolved: weight in effect and heart-rate readings. */
+/** An entry with what the engine needs resolved: the bodyweight in effect that day. */
 export function resolveEntry(entry) {
-  const weighed = entry.weightKg !== '' && Number(entry.weightKg) > 0 ? entry : { ...entry, weightKg: weightForDate(entry.date) };
-  return { ...weighed, hrSamples: heartRateForDate(entry.date) };
+  return entry.weightKg !== '' && Number(entry.weightKg) > 0 ? entry : { ...entry, weightKg: weightForDate(entry.date) };
 }
 
 /* ------------------------------ import/export -------------------------- */
@@ -285,21 +266,20 @@ export function importJson(text) {
   state = {
     ...emptyState(),
     ...parsed,
-    settings: { ...DEFAULT_SETTINGS, ...(parsed.settings || {}) },
+    settings: cleanSettings(parsed.settings),
     entries: parsed.entries || {},
     weightLog: parsed.weightLog || [],
-    heartRate: parsed.heartRate || {},
     sync: {},
   };
+  delete state.heartRate;
   // A restore is the newest word on everything it contains, and anything it
   // leaves out was deliberately dropped.
   const at = nowIso();
   for (const date of Object.keys(state.entries)) touch(`e:${date}`, { at });
-  for (const date of Object.keys(state.heartRate)) touch(`h:${date}`, { at });
   touch('w', { at });
   touch('s', { at });
   for (const key of Object.keys(before.sync || {})) {
-    if (!state.sync[key] && /^[eh]:/.test(key)) touch(key, { del: true, at });
+    if (!state.sync[key] && key.startsWith('e:')) touch(key, { del: true, at });
   }
   persist();
 }
@@ -310,9 +290,8 @@ export function clearAll() {
   // Erase means erase everywhere: tombstones stop other devices restoring it.
   const at = nowIso();
   for (const date of Object.keys(before.entries)) touch(`e:${date}`, { del: true, at });
-  for (const date of Object.keys(before.heartRate || {})) touch(`h:${date}`, { del: true, at });
   for (const key of Object.keys(before.sync || {})) {
-    if (/^[eh]:/.test(key) && !state.sync[key]) touch(key, { del: true, at });
+    if (key.startsWith('e:') && !state.sync[key]) touch(key, { del: true, at });
   }
   touch('w', { at });
   touch('s', { at });
@@ -329,7 +308,6 @@ export function syncRecord(key) {
   let value = null;
   if (!meta.del) {
     if (kind === 'e') value = state.entries[date];
-    else if (kind === 'h') value = state.heartRate[date];
     else if (key === 'w') value = state.weightLog;
     else if (key === 's') value = state.settings;
   }
@@ -356,16 +334,12 @@ export function applyRemote(docs) {
       if (doc.del) delete state.entries[date];
       else if (doc.v && typeof doc.v === 'object') state.entries[date] = doc.v;
       else continue;
-    } else if (kind === 'h' && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      if (doc.del) delete state.heartRate[date];
-      else if (Array.isArray(doc.v)) state.heartRate[date] = doc.v;
-      else continue;
     } else if (doc.k === 'w' && Array.isArray(doc.v)) {
       state.weightLog = doc.v;
       const latest = listWeights().at(-1);
       if (latest) state.settings.weightKg = latest.kg;
     } else if (doc.k === 's' && doc.v && typeof doc.v === 'object') {
-      state.settings = { ...DEFAULT_SETTINGS, ...doc.v };
+      state.settings = cleanSettings(doc.v);
       const latest = listWeights().at(-1);
       if (latest) state.settings.weightKg = latest.kg;
     } else {

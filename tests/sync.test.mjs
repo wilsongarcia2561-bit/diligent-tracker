@@ -15,11 +15,10 @@ describe('sync bookkeeping and merging', () => {
     const off = store.onLocalChange((k) => seen.push(k));
     store.saveEntry(entry('2026-09-01'));
     store.deleteEntry('2026-09-01');
-    store.saveHeartRate({ '2026-09-01': [{ t: 600, bpm: 100 }] });
     store.upsertWeight({ date: '2026-09-02', kg: 58, note: '' });
     store.updateSettings({ breakMinutesDefault: 12 });
     off();
-    assert.deepEqual(seen, ['e:2026-09-01', 'e:2026-09-01', 'h:2026-09-01', 'w', 's']);
+    assert.deepEqual(seen, ['e:2026-09-01', 'e:2026-09-01', 'w', 's']);
     assert.equal(store.syncRecord('e:2026-09-01').del, true, 'the delete is a tombstone, not a hole');
   });
 
@@ -50,10 +49,8 @@ describe('sync bookkeeping and merging', () => {
 
   it('erase-all tombstones everything so another device cannot restore it', () => {
     store.saveEntry(entry('2026-09-01'));
-    store.saveHeartRate({ '2026-09-01': [{ t: 600, bpm: 100 }] });
     store.clearAll();
     assert.equal(store.syncRecord('e:2026-09-01').del, true);
-    assert.equal(store.syncRecord('h:2026-09-01').del, true);
     // A stale device still holding the old day (older than the erase) is refused.
     assert.deepEqual(store.applyRemote([{ k: 'e:2026-09-01', at: earlier, del: false, v: entry('2026-09-01') }]), []);
     assert.ok(!store.getEntry('2026-09-01'));
@@ -78,5 +75,13 @@ describe('sync bookkeeping and merging', () => {
     store.importJson(JSON.stringify({ entries: { '2026-09-02': entry('2026-09-02', { notes: 'restored' }) }, weightLog: [], settings: {} }));
     assert.equal(store.syncRecord('e:2026-09-01').del, true);
     assert.equal(store.getEntry('2026-09-02').notes, 'restored');
+  });
+
+  it('keeps an imported row\'s weight on the day without adding it to the weight log', () => {
+    const before = store.listWeights().length;
+    store.saveEntry(entry('2026-06-01', { weightKg: 57.6 }), { logWeight: false });
+    assert.equal(store.listWeights().length, before);
+    store.saveEntry(entry('2026-06-02', { weightKg: 58.2 }));
+    assert.equal(store.listWeights().length, before + 1);
   });
 });

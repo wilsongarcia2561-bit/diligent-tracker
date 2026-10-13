@@ -160,11 +160,16 @@ export function groupByWeek(days) {
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(d);
   }
-  return [...groups].map(([week, rows]) => ({
-    week,
-    rows,
-    avg: mean(rows, (d) => d.tdee),
-    workCount: rows.filter((d) => !d.restDay).length,
-    restCount: rows.filter((d) => d.restDay).length,
-  }));
+  return [...groups].map(([week, rows]) => {
+    // Unusable days are listed but never counted (no task, no TDEE).
+    const usable = rows.filter((d) => !d.unusable);
+    return {
+      week,
+      rows,
+      avg: mean(usable, (d) => d.tdee),
+      workCount: usable.filter((d) => !d.restDay).length,
+      restCount: usable.filter((d) => d.restDay).length,
+      unusableCount: rows.length - usable.length,
+    };
+  });
 }

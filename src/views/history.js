@@ -13,10 +13,14 @@ export function calculatedEntries() {
     .map((entry) => ({ entry, calc: calculateDay(resolveWeight(entry), store.getSettings()) }));
 }
 
-/** Calculated days only, oldest first — the shape analytics.js works on. */
-export function calculatedDays() {
+/**
+ * Calculated days, oldest first — the shape analytics.js works on. Days marked
+ * unusable are left out: they'd count as ~1,950 kcal work days in every average.
+ */
+export function calculatedDays({ includeUnusable = false } = {}) {
   return calculatedEntries()
     .map((r) => r.calc)
+    .filter((c) => includeUnusable || !c.unusable)
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
@@ -43,17 +47,21 @@ function signed(n) {
   return `${r > 0 ? '+' : r < 0 ? '−' : ''}${Math.abs(r).toLocaleString()}`;
 }
 
-function toCsv(rows) {
+export function toCsv(rows) {
   const header = [
     'date', 'rest_day', 'main_task', 'net_work_minutes', 'feels_like_f', 'sites', 'weight_kg',
     'bmr', 'active_kcal', 'neat_kcal', 'tef_kcal', 'background_kcal', 'tdee_kcal',
     'kcal_raw_comparison', 'intake_kcal', 'balance_kcal', 'diligent_iv_tdee', 'flags',
   ];
   const lines = rows.map(({ entry, calc }) =>
-    [
+    (calc.unusable
+      ? [entry.date, 'false', mainTask(calc) || entry.taskLabel || '', '', calc.feelsLikeF ?? '', calc.siteCount, num(calc.weightKg, 1),
+        Math.round(calc.components.bmr), '', '', '', '', '', '', calc.intakeKcal ?? '', '', calc.dataset?.tdee ?? '',
+        ['UNUSABLE', ...calc.flags.filter((f) => f.level !== 'info').map((f) => f.text)].join('; ')]
+      : [
       entry.date,
-      calc.restDay ? 'yes' : 'no',
-      mainTask(calc),
+      calc.restDay ? 'true' : 'false',
+      mainTask(calc) || entry.taskLabel || '',
       Math.round(calc.timing.netWorkMinutes),
       calc.feelsLikeF ?? '',
       calc.siteCount,
@@ -68,8 +76,8 @@ function toCsv(rows) {
       calc.intakeKcal ?? '',
       calc.balance === null ? '' : Math.round(calc.balance),
       calc.dataset?.tdee ?? '',
-      calc.flags.length,
-    ]
+      calc.flags.map((f) => f.text).join('; '),
+    ])
       .map((v) => {
         const s = String(v ?? '');
         return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -84,13 +92,15 @@ export function exportCsv() {
   if (!rows.length) return;
   openTextPanel({
     title: 'Export CSV',
-    hint: `${rows.length} day${rows.length === 1 ? '' : 's'}, one row each with every TDEE component broken out. Paste into a .csv file or straight into a spreadsheet.`,
+    hint: `${rows.length} day${rows.length === 1 ? '' : 's'}, one row each with every TDEE component broken out. Paste into a .csv file or straight into a spreadsheet — and back into the app with Import or Paste text.`,
     text: toCsv(rows),
   });
 }
 
 export function render(root, { onEdit }) {
-  const days = calculatedDays();
+  const entries = new Map(store.listEntries().map((e) => [e.date, e]));
+  const days = calculatedDays({ includeUnusable: true });
+  const usableDays = days.filter((d) => !d.unusable);
 
   if (!days.length) {
     root.innerHTML = `
@@ -112,11 +122,24 @@ export function render(root, { onEdit }) {
       const head = `
         <tr class="week-row">
           <th colspan="6" scope="rowgroup">${weekLabel(g.week)}</th>
-          <td colspan="2" class="week-meta">AVG <strong>${kcal(g.avg)}</strong> · ${g.workCount} work · ${g.restCount} rest</td>
+          <td colspan="2" class="week-meta">AVG <strong>${kcal(g.avg)}</strong> · ${g.workCount} work · ${g.restCount} rest${g.unusableCount ? ` · ${g.unusableCount} unusable` : ''}</td>
         </tr>`;
       const rows = g.rows
         .map((d) => {
-          const avg = trailingAverage(days, d.date);
+          if (d.unusable) {
+            const label = entries.get(d.date)?.taskLabel || mainTask(d) || 'No task logged';
+            return `
+            <tr class="ledger-row is-unusable" data-date="${d.date}">
+              <td class="col-date">
+                <button type="button" class="row-link" data-date="${d.date}">${ledgerDate(d.date)}</button>
+                <span class="flag-dot" title="Unusable — left out of Trends and averages"></span>
+              </td>
+              <td class="col-task none" title="${esc(label)}"><span class="pill unusable">Unusable</span> ${esc(label)}</td>
+              <td class="num">–</td><td class="num">–</td><td class="num">–</td><td class="num">–</td>
+              <td class="num faint">–</td><td class="num"><span class="faint">–</span></td>
+            </tr>`;
+          }
+          const avg = trailingAverage(usableDays, d.date);
           const delta = avg === null ? null : d.tdee - avg;
           const task = mainTask(d);
           const warn = d.flags.filter((f) => f.level !== 'info').length;
@@ -161,7 +184,8 @@ export function render(root, { onEdit }) {
     <p class="footnote">
       <span class="est-tag">EST</span> Est. lines = post-work NEAT + background daily life, the two lowest-confidence
       components. vs 7D compares each day with the average of the 7 calendar days before it.
-      <span class="flag-dot"></span> marks a day with data-quality warnings.
+      <span class="flag-dot"></span> marks a day with data-quality warnings. <strong>Unusable</strong> days (no task description) are
+      listed but left out of every average and of Trends.
     </p>`;
 
   root.addEventListener('click', (e) => {

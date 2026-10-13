@@ -1,6 +1,6 @@
 /** Settings — framework constants, the bodyweight log (§4), and local data management. */
 
-import { BMR_KCAL, DEFAULT_BREAK_MINUTES, MAX_HR, RESTING_HR } from '../data.js';
+import { BMR_KCAL, DEFAULT_BREAK_MINUTES } from '../data.js';
 import * as store from '../store.js';
 import { confirmClick, esc, kgToLb, lbToKg, num, openPastePanel, openTextPanel, toast, todayIso } from '../ui.js';
 
@@ -60,22 +60,12 @@ function draw(root) {
         <label class="field">
           <span class="field-label">BMR (kcal/day)</span>
           <input type="number" data-setting="bmr" value="${esc(s.bmr)}" step="1" min="0">
-          <span class="hint">Spec value ${BMR_KCAL}. Measured via 8-electrode BIA — do not recalculate from population formulas.</span>
+          <span class="hint">Spec value ${BMR_KCAL}. Fixed constant — never recalculated per day.</span>
         </label>
         <label class="field">
           <span class="field-label">Default break length (min)</span>
           <input type="number" data-setting="breakMinutesDefault" value="${esc(s.breakMinutesDefault)}" step="1" min="0">
           <span class="hint">Spec value ${DEFAULT_BREAK_MINUTES} min per break session.</span>
-        </label>
-        <label class="field">
-          <span class="field-label">Resting HR (bpm)</span>
-          <input type="number" data-setting="restingHr" value="${esc(s.restingHr)}" step="1" min="20">
-          <span class="hint">Spec value ${RESTING_HR} (confirmed range 47–52).</span>
-        </label>
-        <label class="field">
-          <span class="field-label">Estimated max HR (bpm)</span>
-          <input type="number" data-setting="maxHr" value="${esc(s.maxHr)}" step="1" min="100">
-          <span class="hint">Spec value ${MAX_HR} (220 − 19). Individual max may run higher.</span>
         </label>
       </div>
     </section>
@@ -94,7 +84,7 @@ function draw(root) {
 
     <section class="card">
       <h3>Sync across devices</h3>
-      <p class="muted">Inside the artifact, every day, heart-rate day, weight reading and setting is also saved to your own private area, so your phone and laptop show the same data. Only you can read it, even if you share this page. This device keeps a working copy, so the app still opens instantly and works offline.</p>
+      <p class="muted">Inside the artifact, every day, weight reading and setting is also saved to your own private area, so your phone and laptop show the same data. Only you can read it, even if you share this page. This device keeps a working copy, so the app still opens instantly and works offline.</p>
       <p class="sync-line" data-sync-line data-state="off"></p>
       <div class="btn-row">
         <button type="button" class="btn" data-action="sync-now">Retry sync now</button>

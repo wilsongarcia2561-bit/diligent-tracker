@@ -4,7 +4,6 @@ import * as store from './store.js';
 import * as logView from './views/log.js';
 import * as historyView from './views/history.js';
 import * as trendsView from './views/trends.js';
-import * as toolsView from './views/tools.js';
 import * as referenceView from './views/reference.js';
 import * as settingsView from './views/settings.js';
 import * as sync from './sync.js';
@@ -14,13 +13,12 @@ const TABS = [
   { id: 'log', label: 'Daily entry', short: 'Today' },
   { id: 'history', label: 'History', short: 'History' },
   { id: 'trends', label: 'Trends', short: 'Trends' },
-  { id: 'hrr', label: 'BPM / HRR', short: 'HRR' },
   { id: 'reference', label: 'Reference', short: 'Reference' },
   { id: 'settings', label: 'Settings', short: 'Settings' },
 ];
 
 /** Phone bottom bar: the four daily screens up front, the rest behind More. */
-const PRIMARY = ['log', 'history', 'trends', 'hrr'];
+const PRIMARY = ['log', 'history', 'trends', 'settings'];
 
 let current = 'log';
 
@@ -149,8 +147,6 @@ function mount() {
     historyView.render(fresh, { onEdit: openDay });
   } else if (current === 'trends') {
     trendsView.render(fresh, { onEdit: openDay, onLog: () => openDay(todayIso()) });
-  } else if (current === 'hrr') {
-    toolsView.render(fresh);
   } else if (current === 'reference') {
     referenceView.render(fresh);
   } else if (current === 'settings') {
