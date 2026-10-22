@@ -16,15 +16,20 @@ import {
   DATASET_IV,
   DEFAULT_BREAK_MINUTES,
   HEAT_TRIGGER_F,
+  HR_AGREEMENT_MET,
+  HR_MIN_COVERAGE,
   KRI_RETIRED_ON,
+  MAX_HR,
   NEAT_TIERS,
   NON_WORK_DAY,
+  RESTING_HR,
   SOIL_CLASSES,
   SOIL_KEYWORDS,
   TASK_METS,
   TEF_BASELINE_INTAKE_KCAL,
   TEF_BASELINE_KCAL,
 } from './data.js';
+import { rawHrCheck } from './heartRate.js';
 
 export const MODEL = {
   RAW: 'raw',
@@ -387,6 +392,99 @@ export function walkingKcal({ steps, kg, kcal = null }) {
   return { hours, kcal: activeKcal({ met: NON_WORK_DAY.walkingMet, model: MODEL.INTERMEDIATE, kg, hours }) };
 }
 
+/* ------------------------------------------------------------------ *
+ * §5 — raw watch heart rate against the day's MET
+ * ------------------------------------------------------------------ */
+
+const clock = (m) => `${Math.floor(m / 60) % 24}:${String(m % 60).padStart(2, '0')}`;
+
+/**
+ * The minutes of the day that were work, for lining up watch readings.
+ * Timed phases (each with a start and an end) give it exactly, with the gaps
+ * between them left out; otherwise the shift does, minus lunch and any
+ * documented non-work windows. Null when the day has neither.
+ */
+export function workWindow(entry) {
+  const exclude = [];
+  const pair = (a, b) => {
+    const s = parseTime(a);
+    let e = parseTime(b);
+    if (s === null || e === null) return null;
+    if (e <= s) e += 1440;
+    return [s, e];
+  };
+  const lunch = pair(entry.lunchStart, entry.lunchEnd);
+  if (lunch) exclude.push(lunch);
+  for (const w of Array.isArray(entry.nonLaborWindows) ? entry.nonLaborWindows : []) {
+    const p = pair(w && w.start, w && w.end);
+    if (p) exclude.push(p);
+  }
+  const labor = (entry.phases || []).filter((p) => p.description || (p.met !== '' && p.met !== null && p.met !== undefined));
+  const timed = labor.map((p) => pair(p.start, p.end));
+  if (labor.length && timed.every(Boolean)) {
+    const spans = timed.sort((a, b) => a[0] - b[0]);
+    for (let i = 1; i < spans.length; i += 1) if (spans[i][0] > spans[i - 1][1]) exclude.push([spans[i - 1][1], spans[i][0]]);
+    const start = spans[0][0];
+    const end = Math.max(...spans.map((x) => x[1]));
+    return { start, end, exclude, source: 'phases', label: `${clock(start)}–${clock(end)}` };
+  }
+  const shift = pair(entry.shiftStart, entry.shiftEnd);
+  if (!shift) return null;
+  return { start: shift[0], end: shift[1], exclude, source: 'shift', label: `${clock(shift[0])}–${clock(shift[1])}` };
+}
+
+/** The data-quality line for a day's heart-rate check. */
+function heartRateFlag(hr, settings) {
+  if (hr.status === 'no-window') {
+    return { level: 'info', text: 'Watch heart rate is on file for this day, but there are no shift or phase times to line it up with work, so the MET can’t be checked against it. Add the shift start and end.' };
+  }
+  if (hr.status === 'no-readings') {
+    return { level: 'info', text: `The watch has no heart-rate readings during this day’s work time (${hr.window.label}), so the MET can’t be checked.` };
+  }
+  const base = `Raw watch heart rate (no correction): ${Math.round(hr.minutes)} of ${Math.round(hr.span)} work min recorded, average ${hr.hr.toFixed(0)} bpm → HRR ${Math.round(hr.hrr * 100)}% (resting ${settings.restingHr}, max ${settings.maxHr}) → MET ${hr.met.toFixed(2)}`;
+  if (hr.status === 'sparse') {
+    return { level: 'info', text: `${base}. That covers only ${Math.round(hr.coverage * 100)}% of the work time — too little to check the MET against (needs ${Math.round(HR_MIN_COVERAGE * 100)}%).` };
+  }
+  if (hr.verdict === 'hr-only') {
+    return { level: 'info', text: `${base}. No task MET to compare it with; reconstructed from heart rate alone, this day would be MET ${hr.suggested}.` };
+  }
+  if (hr.verdict === 'agree') {
+    return { level: 'info', text: `${base}. Agrees with the day’s MET ${hr.dayMet.toFixed(2)} (within ${HR_AGREEMENT_MET}) — keep it (§5).` };
+  }
+  return {
+    level: 'warn',
+    text: `${base}, ${Math.abs(hr.diff).toFixed(2)} ${hr.verdict === 'down' ? 'below' : 'above'} the day’s MET ${hr.dayMet.toFixed(2)}. §5: revise ${hr.verdict} to ${hr.suggested} — “Use MET ${hr.suggested}” in the day’s heart-rate panel does it.`,
+  };
+}
+
+/**
+ * §5 — apply a heart-rate verdict: the day's phases move together so they
+ * blend to the heart-rate MET (each keeps its difference from the others).
+ * Returns the revised entry, or null when the check doesn't call for a change.
+ */
+export function reviseToHeartRate(entry, hr) {
+  if (!hr || hr.status !== 'ok' || (hr.verdict !== 'up' && hr.verdict !== 'down')) return null;
+  const delta = hr.suggested - hr.dayMet;
+  const worked = (entry.phases || []).filter((p) => Number(p.met) > 0).length;
+  const why = `raw watch heart rate (no correction): average ${hr.hr.toFixed(0)} bpm over ${Math.round(hr.minutes)} work min → HRR ${Math.round(hr.hrr * 100)}% → MET ${hr.met.toFixed(2)}`;
+  const phases = entry.phases.map((p) => {
+    const met = Number(p.met);
+    if (!(met > 0)) return p;
+    const next = Math.max(1.5, Math.round((met + delta) * 100) / 100);
+    return {
+      ...p,
+      met: next,
+      metAuto: false,
+      metSource: 'hr-raw',
+      metConfidence: 'high',
+      metNotes: [],
+      metBasis: `Revised ${hr.verdict} ${met} → ${next} on ${why}${worked > 1 ? `; every phase moved ${delta > 0 ? '+' : '−'}${Math.abs(delta).toFixed(2)} so the day blends to ${hr.suggested}` : ''} (§5).`,
+      metRevisionNote: `${met} → ${next} on raw heart rate`,
+    };
+  });
+  return { ...entry, phases };
+}
+
 /** §6 — the document-of-record figure for a date, if DILIGENT IV lists one. */
 export function datasetFigure(date) {
   return DATASET_IV.find((d) => d.date === date) || null;
@@ -394,6 +492,8 @@ export function datasetFigure(date) {
 
 export function calculateDay(entry, settings = {}) {
   const bmr = Number(settings.bmr ?? BMR_KCAL);
+  const restingHr = Number(settings.restingHr) || RESTING_HR;
+  const maxHr = Number(settings.maxHr) || MAX_HR;
   const breakMinutesDefault = Number(settings.breakMinutesDefault ?? DEFAULT_BREAK_MINUTES);
   const kg = Number(entry.weightKg || settings.weightKg || 0);
   const feelsLikeF = entry.feelsLikeF === '' || entry.feelsLikeF === undefined || entry.feelsLikeF === null
@@ -570,6 +670,16 @@ export function calculateDay(entry, settings = {}) {
     }
   }
 
+  // §5 — the day's MET against its raw watch heart rate, when there is any.
+  let heartRate = null;
+  if (!restDay && Array.isArray(entry.watchHr) && entry.watchHr.length) {
+    const window = workWindow(entry);
+    heartRate = window
+      ? { ...rawHrCheck(entry.watchHr, window, { dayMet: blendedMet, restingHr, maxHr, agreement: HR_AGREEMENT_MET, minCoverage: HR_MIN_COVERAGE }), window }
+      : { status: 'no-window' };
+    flags.push(heartRateFlag(heartRate, { restingHr, maxHr }));
+  }
+
   // §6 — reconcile against the document of record, never assume they're in sync.
   const doc = datasetFigure(entry.date);
   if (doc) {
@@ -578,9 +688,12 @@ export function calculateDay(entry, settings = {}) {
     } else {
       const delta = tdee - doc.tdee;
       const off = Math.abs(delta) > 300;
+      // §6 figures were checked against corrected heart rate (+30/+35), which
+      // is retired: a day revised on raw heart rate is expected to land lower.
+      const lowerOnRawHr = off && delta < 0 && blendedMet !== null && blendedMet < doc.met;
       flags.push({
-        level: off ? 'warn' : 'info',
-        text: `DILIGENT IV §6 records ~${doc.tdee.toLocaleString()} kcal (MET ${doc.met}, ${doc.hours} active hr) for this day; the app computes ${Math.round(tdee).toLocaleString()} (${delta >= 0 ? '+' : '−'}${Math.abs(Math.round(delta)).toLocaleString()}).${off ? ' Outside the ±300 kcal precision floor — re-verify the stored day.' : ''}${doc.note ? ` ${doc.note}` : ''}`,
+        level: off && !lowerOnRawHr ? 'warn' : 'info',
+        text: `DILIGENT IV §6 records ~${doc.tdee.toLocaleString()} kcal (MET ${doc.met}, ${doc.hours} active hr) for this day; the app computes ${Math.round(tdee).toLocaleString()} (${delta >= 0 ? '+' : '−'}${Math.abs(Math.round(delta)).toLocaleString()}).${lowerOnRawHr ? ' The §6 figure was checked against corrected heart rate (+30/+35), which is no longer used — a lower MET on raw heart rate explains the gap.' : off ? ' Outside the ±300 kcal precision floor — re-verify the stored day.' : ''}${doc.note ? ` ${doc.note}` : ''}`,
       });
     }
   }
@@ -592,6 +705,7 @@ export function calculateDay(entry, settings = {}) {
     blendedMet,
     unusable: Boolean(entry.unusable),
     dataset: doc,
+    heartRate,
     weightKg: kg,
     feelsLikeF,
     timing: { ...timing, netWorkMinutes },

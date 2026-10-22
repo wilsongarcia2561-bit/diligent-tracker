@@ -2,8 +2,9 @@
 
 A local web app implementing **DILIGENT IV — TDEE Methodology & Dataset** (revised Sept 23, 2026),
 which supersedes the Diligent III framework spec. Everything runs
-in the browser: no build step, no dependencies, no network calls, no accounts. Data lives in the
-browser's `localStorage`.
+in the browser: no build step, no dependencies, no accounts. Data lives in the browser's
+`localStorage` (and, inside the artifact, the signed-in person's private sync area). The only
+network fetch is pdf.js from a CDN, the first time a PDF is imported.
 
 ```
 TDEE = BMR + Active Work Calories + Post-Work NEAT + TEF + Background Daily Life
@@ -28,7 +29,9 @@ npm test          # or: node --test "tests/**/*.test.mjs"
 
 Tests cover the calculation engine — the kcal formulas, net work time, phase allocation, MET
 suggestion, the estimated lines, full-day totals and trend aggregation — plus the calendar and
-TDEE-table importers, the MET glossary and the sync merge rules. No dependencies; uses Node's built-in test runner.
+TDEE-table importers, the Samsung heart-rate reader and raw-HR check, the `.xlsx` reader (hand-built
+zips plus a synthetic openpyxl workbook in `tests/fixtures`), the MET glossary and the sync merge
+rules. No dependencies; uses Node's built-in test runner.
 
 ## How the calculation works
 
@@ -63,10 +66,17 @@ history table — because they're the lowest-confidence lines in the framework.
 count, 8,500 steps ≈ 1.4 hr when blank) + ~95 general-day NEAT + ~200 TEF, with no background
 bucket — ~1,950 kcal, still unvalidated.
 
-**No watch heart-rate framework.** The BPM correction / HRR cross-check, the heart-rate export
-import, per-phase watch BPM and the Samsung capture-rate check were removed. MET comes from the
-calendar text (glossary), a revision written in the day's NOTE line, an imported TDEE table, or
-by hand.
+**Watch heart rate — raw, no correction (§4, §5).** *Import from file* takes the Samsung Health
+heart-rate PDF (or its rows pasted, or copied into a spreadsheet). Readings are stored per date and
+used **as recorded**: the old +30 / +35 Samsung correction is retired. Each 30-min window counts at
+the middle of its min–max, weighted by the minutes it overlaps the day's work time (the shift, or
+its timed phases, minus lunch and any excluded windows); "Exercising" segments are only marked and
+single "Resting" spot readings are left out. HRR = (HR − 49) ÷ (201 − 49) (both editable in
+Settings) and MET = 1 + 10 × HRR, the §4 table as one line. Within 0.5 of the day's MET it agrees;
+further out §5 says revise, up or down. Under 60% of work minutes recorded, the day is too thin to
+judge and keeps its MET. Each day shows a heart-rate panel (chart, average, HRR, MET, verdict, and
+*Use MET* when it disagrees); after an import, a summary lists every day that disagrees with a
+*Revise N days* button. Nothing changes until one of those is pressed. See `src/heartRate.js`.
 
 **Reconciling with the document (§6, §12).** Days listed in DILIGENT IV's hand-computed dataset
 show the document's figure and the difference in their data-quality panel (a warning past
@@ -80,7 +90,10 @@ the allocation bar sweeps in, sparklines draw themselves and weekly candles grow
 panel is on screen. On Daily entry, hovering (or tapping/holding on touch, or focusing) a
 segment or legend row of the TDEE breakdown shows that line's kcal, share, hours, rate and MET. All of it is off under `prefers-reduced-motion`.
 
-**Day-by-day TDEE tables (CSV or a spreadsheet paste).** *Import from file* takes a `.csv`, and
+**Day-by-day TDEE tables (CSV, Excel, or a spreadsheet paste).** *Import from file* takes a `.csv`
+or an Excel `.xlsx` (read with no library — `src/xlsx.js` unzips it with the browser's own
+`DecompressionStream`; real date cells come out as dates, and the first sheet that is a TDEE table
+is used, wherever it sits in the workbook), and
 *Paste text* takes rows copied straight out of Google Sheets or Excel (tab-separated, `TRUE`/
 `FALSE`, `6/1/2026` dates, `3,000`-style numbers), with or without the header row — the app's own
 *Export CSV* format is the reference, so an export can always come back in. Each row becomes a
@@ -90,10 +103,13 @@ given, and on a non-work row the walking kcal as given. The file's own TDEE is u
 the result — the import reports whether every usable day matches (within 2 kcal) and lists any
 that don't. A row with no TDEE and no work, or flagged UNUSABLE, is kept and marked **Unusable**:
 listed in History, left out of Trends and every average. The row's bodyweight stays on the day
-and is not added to the weight log. See `src/summaryImport.js` and `tests/summaryImport.test.mjs`.
+and is not added to the weight log. Two optional columns, `shift` (`07:47-16:32`) and `excluded`
+(`11:39-14:36 09:26-09:46`), put the day's work on the clock so its heart rate can be lined up
+with it; they never change net minutes. Old `.xls`, `.numbers` and `.ods` files are refused with a
+note to save as `.xlsx` or `.csv`. See `src/summaryImport.js` and `tests/summaryImport.test.mjs`.
 
-**Sync across devices.** Inside the artifact, every day, the weight log and the
-settings are saved as small documents in the signed-in person's *private* database area
+**Sync across devices.** Inside the artifact, every day, each day's watch heart rate (`r_<date>`),
+the weight log and the settings are saved as small documents in the signed-in person's *private* database area
 (`data/users/<id>/…` — unreadable even to people the page is shared with). `localStorage`
 stays the working copy, so the app opens instantly and works offline; `src/sync.js` reconciles
 in the background and the newest change to each document wins. Deletions and *Erase all* travel
@@ -130,9 +146,9 @@ the weight that was actually in effect. A per-entry fasted-morning weight also w
 | — | Calendar-log import (.md/.txt/.pdf) — fills known fields, leaves the rest blank | ✅ |
 | §12.6 | Trend view — TDEE, weight, work vs rest, rolling 7-day | ✅ |
 | §12.7 | Multi-site / multi-phase splitting with independent MET/model/time | ✅ |
-| §12.8 | BPM/HRR calculator | ✖ removed at the user's request |
+| §12.8 | Heart-rate check — Samsung PDF import, raw HRR → MET, per-day verdict and revise | ✅ (no BPM correction, at the user's request) |
 | §12.9 | Samsung Health screenshot OCR | ✖ not built |
-| — | Day-by-day TDEE table import (.csv or pasted spreadsheet rows), reconciled row by row | ✅ |
+| — | Day-by-day TDEE table import (.csv, .xlsx or pasted spreadsheet rows), reconciled row by row | ✅ |
 | §12.10 | MyFitnessPal-style food log | ⚠️ single daily intake field for deficit/surplus + TEF |
 | §12.11 | Model comparison display with the used model flagged | ✅ |
 | §12.12 | Data-quality flags | ✅ |

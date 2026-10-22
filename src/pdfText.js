@@ -45,19 +45,28 @@ export async function extractPdfText(arrayBuffer) {
   for (let i = 1; i <= doc.numPages; i += 1) {
     const page = await doc.getPage(i);
     const content = await page.getTextContent();
-    // Keep the PDF's line structure: a table row or a "1:05 PM 118 bpm" line
-    // must stay one line for the calendar parser to read it.
-    let text = '';
-    let lastY = null;
-    for (const item of content.items) {
-      const y = item.transform ? Math.round(item.transform[5]) : null;
-      if (lastY !== null && y !== null && Math.abs(y - lastY) > 2 && !text.endsWith('\n')) text += '\n';
-      else if (text && !text.endsWith('\n') && !text.endsWith(' ')) text += ' ';
-      text += item.str;
-      if (item.hasEOL) text += '\n';
-      if (y !== null) lastY = y;
-    }
-    pages.push(text);
+    pages.push(textFromItems(content.items));
   }
   return pages.join('\n\n');
+}
+
+/**
+ * One page's text items → lines. Keeps the PDF's line structure: a table row
+ * or a "1:05 PM 118 bpm" line stays one line, so the calendar and heart-rate
+ * readers see rows, not a soup of words. Pure, so it is tested under Node
+ * with the same pdf.js the browser loads.
+ */
+export function textFromItems(items) {
+  let text = '';
+  let lastY = null;
+  for (const item of items) {
+    if (typeof item.str !== 'string') continue;
+    const y = item.transform ? Math.round(item.transform[5]) : null;
+    if (lastY !== null && y !== null && Math.abs(y - lastY) > 2 && !text.endsWith('\n')) text += '\n';
+    else if (text && !text.endsWith('\n') && !text.endsWith(' ') && item.str) text += ' ';
+    text += item.str;
+    if (item.hasEOL) text += '\n';
+    if (y !== null) lastY = y;
+  }
+  return text;
 }

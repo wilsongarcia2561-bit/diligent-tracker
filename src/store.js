@@ -7,6 +7,8 @@ import {
   BMR_KCAL,
   DEFAULT_BREAK_MINUTES,
   DEFAULT_WEIGHT_KG,
+  MAX_HR,
+  RESTING_HR,
   SEED_WEIGHT_LOG,
 } from './data.js';
 
@@ -16,6 +18,8 @@ export const DEFAULT_SETTINGS = {
   bmr: BMR_KCAL,
   breakMinutesDefault: DEFAULT_BREAK_MINUTES,
   weightKg: DEFAULT_WEIGHT_KG,
+  restingHr: RESTING_HR,
+  maxHr: MAX_HR,
 };
 
 function emptyState() {
@@ -24,19 +28,25 @@ function emptyState() {
     settings: { ...DEFAULT_SETTINGS },
     entries: {},
     weightLog: SEED_WEIGHT_LOG.map((w) => ({ ...w })),
+    // Samsung watch heart rate by date: { rows: [[start, end, lo, hi, tag]…], source, at }.
+    watchHr: {},
     // When each synced item last changed on this device: key → { at, del? }.
-    // Keys: e:<date> a day, w the weight log, s the settings. `del` marks a
-    // deletion so it can travel to other devices.
+    // Keys: e:<date> a day, r:<date> that day's watch heart rate, w the weight
+    // log, s the settings. `del` marks a deletion so it can travel to other devices.
     sync: {},
   };
 }
 
 let state = emptyState();
 
-/** Saved settings minus anything the app no longer uses (the old HRR baselines). */
+/** Saved settings over the defaults, with heart-rate baselines kept only when they are plausible. */
 function cleanSettings(saved) {
-  const { restingHr, maxHr, ...rest } = saved || {};
-  return { ...DEFAULT_SETTINGS, ...rest };
+  const out = { ...DEFAULT_SETTINGS, ...(saved || {}) };
+  const rest = Number(out.restingHr);
+  const max = Number(out.maxHr);
+  out.restingHr = rest >= 30 && rest <= 110 ? rest : RESTING_HR;
+  out.maxHr = max >= 120 && max <= 240 && max > out.restingHr ? max : MAX_HR;
+  return out;
 }
 const listeners = new Set();
 const EPOCH = '1970-01-01T00:00:00.000Z';
@@ -65,7 +75,10 @@ function migrateSync() {
   for (const [date, entry] of Object.entries(state.entries)) {
     state.sync[`e:${date}`] ||= { at: entry.updatedAt || EPOCH };
   }
-  // Heart-rate readings belonged to the retired BPM/HRR framework.
+  for (const [date, day] of Object.entries(state.watchHr)) {
+    state.sync[`r:${date}`] ||= { at: day.at || EPOCH };
+  }
+  // "h:" readings belonged to the retired corrected-BPM framework.
   for (const key of Object.keys(state.sync)) if (key.startsWith('h:')) delete state.sync[key];
   if (!state.sync.w && JSON.stringify(state.weightLog) !== JSON.stringify(SEED_WEIGHT_LOG)) state.sync.w = { at: EPOCH };
   if (!state.sync.s && JSON.stringify({ ...state.settings, weightKg: 0 }) !== JSON.stringify({ ...DEFAULT_SETTINGS, weightKg: 0 })) state.sync.s = { at: EPOCH };
@@ -82,6 +95,7 @@ export function load() {
         settings: cleanSettings(parsed.settings),
         entries: parsed.entries || {},
         weightLog: parsed.weightLog || [],
+        watchHr: cleanWatchHr(parsed.watchHr),
         sync: parsed.sync || {},
       };
       delete state.heartRate;
@@ -126,7 +140,8 @@ export function getSettings() {
 }
 
 export function updateSettings(patch) {
-  state.settings = { ...state.settings, ...patch };
+  // A half-typed heart-rate baseline ("4" on the way to "49") falls back to the default.
+  state.settings = cleanSettings({ ...state.settings, ...patch });
   touch('s');
   persist();
 }
@@ -214,6 +229,49 @@ export function deleteEntry(date) {
   persist();
 }
 
+/* ---------------------------- watch heart rate ---------------------------- */
+
+const isDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d);
+const validDay = (day) => day && typeof day === 'object' && Array.isArray(day.rows)
+  && day.rows.every((r) => Array.isArray(r) && r.length >= 4 && r.slice(0, 4).every(Number.isFinite));
+
+function cleanWatchHr(saved) {
+  const out = {};
+  for (const [date, day] of Object.entries(saved || {})) if (isDate(date) && validDay(day)) out[date] = day;
+  return out;
+}
+
+/**
+ * Store a heart-rate export, one record per date. A date already on file is
+ * replaced by the new export's readings for it — an export covers whole days.
+ * @param {Record<string, any[]>} byDate rows per date, as heartRate.groupByDate gives them
+ */
+export function saveHeartRate(byDate, { source = '' } = {}) {
+  const at = nowIso();
+  const dates = Object.keys(byDate).filter(isDate).sort();
+  for (const date of dates) {
+    state.watchHr[date] = { rows: byDate[date], source, at };
+    touch(`r:${date}`, { at });
+  }
+  persist();
+  return dates;
+}
+
+/** That day's watch readings, or null. */
+export function getHeartRate(date) {
+  return state.watchHr[date]?.rows || null;
+}
+
+export const heartRateDates = () => Object.keys(state.watchHr).sort();
+
+/** Remove every stored heart-rate day (and tell other devices to). */
+export function clearHeartRate() {
+  const at = nowIso();
+  for (const date of Object.keys(state.watchHr)) touch(`r:${date}`, { del: true, at });
+  state.watchHr = {};
+  persist();
+}
+
 /* ------------------------------ weight log ----------------------------- */
 
 export function listWeights() {
@@ -250,9 +308,13 @@ export function weightForDate(date) {
   return all.length ? all[0].kg : state.settings.weightKg;
 }
 
-/** An entry with what the engine needs resolved: the bodyweight in effect that day. */
+/**
+ * An entry with what the engine needs resolved: the bodyweight in effect that
+ * day, and that day's watch heart rate. For calculating only — never saved.
+ */
 export function resolveEntry(entry) {
-  return entry.weightKg !== '' && Number(entry.weightKg) > 0 ? entry : { ...entry, weightKg: weightForDate(entry.date) };
+  const weightKg = entry.weightKg !== '' && Number(entry.weightKg) > 0 ? entry.weightKg : weightForDate(entry.date);
+  return { ...entry, weightKg, watchHr: getHeartRate(entry.date) };
 }
 
 /* ------------------------------ import/export -------------------------- */
@@ -273,6 +335,7 @@ export function importJson(text) {
     settings: cleanSettings(parsed.settings),
     entries: parsed.entries || {},
     weightLog: parsed.weightLog || [],
+    watchHr: cleanWatchHr(parsed.watchHr),
     sync: {},
   };
   delete state.heartRate;
@@ -280,10 +343,11 @@ export function importJson(text) {
   // leaves out was deliberately dropped.
   const at = nowIso();
   for (const date of Object.keys(state.entries)) touch(`e:${date}`, { at });
+  for (const date of Object.keys(state.watchHr)) touch(`r:${date}`, { at });
   touch('w', { at });
   touch('s', { at });
   for (const key of Object.keys(before.sync || {})) {
-    if (!state.sync[key] && key.startsWith('e:')) touch(key, { del: true, at });
+    if (!state.sync[key] && (key.startsWith('e:') || key.startsWith('r:'))) touch(key, { del: true, at });
   }
   persist();
 }
@@ -294,8 +358,9 @@ export function clearAll() {
   // Erase means erase everywhere: tombstones stop other devices restoring it.
   const at = nowIso();
   for (const date of Object.keys(before.entries)) touch(`e:${date}`, { del: true, at });
+  for (const date of Object.keys(before.watchHr || {})) touch(`r:${date}`, { del: true, at });
   for (const key of Object.keys(before.sync || {})) {
-    if (key.startsWith('e:') && !state.sync[key]) touch(key, { del: true, at });
+    if ((key.startsWith('e:') || key.startsWith('r:')) && !state.sync[key]) touch(key, { del: true, at });
   }
   touch('w', { at });
   touch('s', { at });
@@ -312,6 +377,7 @@ export function syncRecord(key) {
   let value = null;
   if (!meta.del) {
     if (kind === 'e') value = state.entries[date];
+    else if (kind === 'r') value = state.watchHr[date];
     else if (key === 'w') value = state.weightLog;
     else if (key === 's') value = state.settings;
   }
@@ -334,9 +400,13 @@ export function applyRemote(docs) {
     if (mine && mine.at >= doc.at) continue;
     const kind = doc.k[0];
     const date = doc.k.slice(2);
-    if (kind === 'e' && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    if (kind === 'e' && isDate(date)) {
       if (doc.del) delete state.entries[date];
       else if (doc.v && typeof doc.v === 'object') state.entries[date] = doc.v;
+      else continue;
+    } else if (kind === 'r' && doc.k[1] === ':' && isDate(date)) {
+      if (doc.del) delete state.watchHr[date];
+      else if (validDay(doc.v)) state.watchHr[date] = doc.v;
       else continue;
     } else if (doc.k === 'w' && Array.isArray(doc.v)) {
       state.weightLog = doc.v;

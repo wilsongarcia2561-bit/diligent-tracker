@@ -11,6 +11,7 @@ import {
   durationMinutes,
   modelOffset,
   parseTime,
+  reviseToHeartRate,
   rollingAverage,
   suggestBackgroundTier,
   suggestMet,
@@ -18,6 +19,7 @@ import {
   suggestTef,
   summarizeTrends,
   walkingKcal,
+  workWindow,
 } from '../src/engine.js';
 
 const SETTINGS = { bmr: 1436, breakMinutesDefault: 11, restingHr: 49, maxHr: 201, weightKg: 57.6 };
@@ -459,5 +461,81 @@ describe('summary rows (an imported TDEE table)', () => {
     const calc = calculateDay({ date: '2026-07-09', unusable: true, phases: [], weightKg: 57.6 }, SETTINGS);
     assert.equal(calc.unusable, true);
     assert.ok(calc.flags.some((f) => f.level === 'error' && /left out of Trends/.test(f.text)));
+  });
+});
+
+/* ------------------------------------------------------------------ */
+
+describe('§5 raw heart-rate check of a day', () => {
+  // 08:00–16:00 at a steady 95–115 (105 bpm → MET 4.68); 12:00–13:00 at rest.
+  const watchHr = Array.from({ length: 16 }, (_, i) => {
+    const t = 480 + i * 30;
+    return t >= 720 && t < 780 ? [t, t + 29, 55, 65, ''] : [t, t + 29, 95, 115, ''];
+  });
+  const day = (extra = {}) => ({
+    date: '2026-10-07', weightKg: 57.6, shiftStart: '08:00', shiftEnd: '16:00', lunchStart: '12:00', lunchEnd: '13:00',
+    phases: [{ id: 'a', description: 'Dig', met: 6 }], watchHr, ...extra,
+  });
+
+  it('lines readings up with the shift minus lunch and other excluded windows', () => {
+    assert.deepEqual(workWindow(day()), { start: 480, end: 960, exclude: [[720, 780]], source: 'shift', label: '8:00–16:00' });
+    const w = workWindow(day({ nonLaborWindows: [{ start: '09:30', end: '10:00' }] }));
+    assert.deepEqual(w.exclude, [[720, 780], [570, 600]]);
+    assert.equal(workWindow({ phases: [] }), null);
+  });
+
+  it('uses timed phases when every phase has times, leaving the gaps between them out', () => {
+    const w = workWindow(day({ phases: [{ description: 'A', start: '08:00', end: '10:00' }, { description: 'B', start: '10:30', end: '12:00' }] }));
+    assert.equal(w.source, 'phases');
+    assert.deepEqual([w.start, w.end], [480, 720]);
+    assert.ok(w.exclude.some(([a, b]) => a === 600 && b === 630));
+  });
+
+  it('flags a day whose MET the raw heart rate reads lower, and suggests the revision', () => {
+    const calc = calculateDay(day(), SETTINGS);
+    assert.equal(calc.heartRate.verdict, 'down');
+    assert.equal(calc.heartRate.minutes, 420);
+    close(calc.heartRate.met, 4.68);
+    assert.equal(calc.heartRate.suggested, 4.75);
+    const flag = calc.flags.find((f) => /Raw watch heart rate/.test(f.text));
+    assert.equal(flag.level, 'warn');
+    assert.match(flag.text, /no correction/);
+    assert.match(flag.text, /revise down to 4\.75/);
+  });
+
+  it('agrees quietly when the MET is within 0.5, and skips non-work days', () => {
+    const calc = calculateDay(day({ phases: [{ id: 'a', description: 'Dig', met: 4.5 }] }), SETTINGS);
+    assert.equal(calc.heartRate.verdict, 'agree');
+    assert.equal(calc.flags.find((f) => /Raw watch heart rate/.test(f.text)).level, 'info');
+    assert.equal(calculateDay(day({ restDay: true }), SETTINGS).heartRate, null);
+  });
+
+  it('says so when there are readings but no times to line them up with', () => {
+    const calc = calculateDay(day({ shiftStart: '', shiftEnd: '' }), SETTINGS);
+    assert.equal(calc.heartRate.status, 'no-window');
+  });
+
+  it('follows the resting and max heart rate in settings', () => {
+    const calc = calculateDay(day(), { ...SETTINGS, restingHr: 60, maxHr: 190 });
+    close(calc.heartRate.hrr, (105 - 60) / 130);
+  });
+
+  it('revises every phase together so the day blends to the heart-rate MET', () => {
+    const two = day({
+      phases: [{ id: 'a', description: 'Dig', met: 7, netMinutesOverride: 120 }, { id: 'b', description: 'Rake', met: 5, netMinutesOverride: 120 }],
+    });
+    const calc = calculateDay(two, SETTINGS);
+    const revised = reviseToHeartRate(two, calc.heartRate);
+    assert.deepEqual(revised.phases.map((p) => p.met), [5.75, 3.75]);
+    assert.equal(revised.phases[0].metSource, 'hr-raw');
+    close(calculateDay(revised, SETTINGS).blendedMet, 4.75);
+    assert.equal(reviseToHeartRate(two, { ...calc.heartRate, verdict: 'agree' }), null);
+  });
+
+  it('explains a §6 gap when the day was revised down on raw heart rate', () => {
+    const calc = calculateDay({ date: '2026-08-12', weightKg: 57.6, netWorkMinutesOverride: 288, neatKcal: 95, tefKcal: 210, backgroundKcal: 117, phases: [{ met: 4.5, netMinutesOverride: 288 }] }, SETTINGS);
+    const flag = calc.flags.find((f) => /DILIGENT IV §6/.test(f.text));
+    assert.equal(flag.level, 'info');
+    assert.match(flag.text, /corrected heart rate/);
   });
 });

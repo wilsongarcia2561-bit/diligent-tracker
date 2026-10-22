@@ -3,7 +3,7 @@ import { describe, it } from 'node:test';
 
 import { calculateDay } from '../src/engine.js';
 import * as store from '../src/store.js';
-import { EXPORT_COLUMNS, looksLikeSummaryTable, parseDate, parseDelimited, parseNumber, parseSummaryTable } from '../src/summaryImport.js';
+import { EXPORT_COLUMNS, looksLikeSummaryTable, parseDate, parseDelimited, parseNumber, parseSummaryTable, parseWindows } from '../src/summaryImport.js';
 import { toCsv } from '../src/views/history.js';
 
 const SETTINGS = { bmr: 1436, breakMinutesDefault: 10, weightKg: 57.6 };
@@ -87,6 +87,35 @@ describe('reading a day-by-day TDEE table', () => {
     assert.equal(skipped.length, 1);
     assert.deepEqual(duplicates, ['2026-06-01']);
     assert.equal(days.find((d) => d.date === '2026-06-01').patch.phases[0].description, 'Again');
+  });
+});
+
+describe('shift and excluded-time columns', () => {
+  const row = '2026-10-07,false,Dig,374,82,1,57.6,1436,1346,92,210,225,3309,1705,,,,Tier B';
+
+  it('place the work on the clock without changing net minutes', () => {
+    const { days } = parseSummaryTable(`${HEADER}\n${row},08:16-16:28,"12:01-13:09 9:30 AM - 9:45 AM"`);
+    const p = days[0].patch;
+    assert.equal(p.shiftStart, '08:16');
+    assert.equal(p.shiftEnd, '16:28');
+    assert.deepEqual(p.nonLaborWindows, [{ start: '12:01', end: '13:09' }, { start: '09:30', end: '09:45' }]);
+    assert.equal(calculateDay(toEntry(days[0]), SETTINGS).timing.netWorkMinutes, 374);
+  });
+
+  it('read headerless pastes in both the old 18-column and the new 20-column order', () => {
+    assert.equal(looksLikeSummaryTable(row), true);
+    assert.equal(looksLikeSummaryTable(`${row},08:16-16:28,12:01-13:09`), true);
+    assert.equal(parseSummaryTable(`${row},08:16-16:28,12:01-13:09`).days[0].patch.shiftEnd, '16:28');
+    assert.equal(parseWindows('7:47 AM to 4:32 PM')[0].end, '16:32');
+  });
+
+  it('come back out of the export so a round trip keeps them', () => {
+    const e = { ...store.newEntry('2026-10-07'), weightKg: 57.6, shiftStart: '08:16', shiftEnd: '16:28', lunchStart: '12:01', lunchEnd: '13:09',
+      nonLaborWindows: [{ start: '09:30', end: '09:45' }], phases: [{ ...store.newPhase(), description: 'Dig', met: 4.75 }] };
+    const csv = toCsv([{ entry: e, calc: calculateDay(e, SETTINGS) }]);
+    const back = parseSummaryTable(csv).days[0].patch;
+    assert.equal(back.shiftStart, '08:16');
+    assert.deepEqual(back.nonLaborWindows, [{ start: '12:01', end: '13:09' }, { start: '09:30', end: '09:45' }]);
   });
 });
 

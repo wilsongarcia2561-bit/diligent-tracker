@@ -21,13 +21,16 @@ import {
   durationMinutes,
   formatDuration,
   calculateDay,
+  reviseToHeartRate,
 } from '../engine.js';
+import { exportRange, exportYear, groupByDate, looksLikeHeartRateExport, parseHeartRate } from '../heartRate.js';
 import { COMPONENTS, trailingAverage } from '../analytics.js';
 import { htmlToText, parseCalendarLog, parseMultiDayLog, splitDayBlocks } from '../calendarImport.js';
 import { classifyTask, daySoil, isShadeDay } from '../metGlossary.js';
 import { looksLikeSummaryTable, parseSummaryTable } from '../summaryImport.js';
 import * as store from '../store.js';
 import { confirmClick, esc, kcal, num, openPastePanel, openTextPanel, pct, toast, todayIso } from '../ui.js';
+import { readXlsx, rowsToCsv, rowsToText } from '../xlsx.js';
 import { calculatedDays } from './history.js';
 
 let draft = null;
@@ -84,7 +87,7 @@ export function loadDate(date) {
  */
 export function onRemoteChange(keys) {
   if (!draft) return;
-  const mine = keys.some((k) => k === `e:${draft.date}` || k === `h:${draft.date}` || k === 'w' || k === 's');
+  const mine = keys.some((k) => k === `e:${draft.date}` || k === `r:${draft.date}` || k === 'w' || k === 's');
   const form = document.getElementById('entry-form');
   if (!form) return;
   if (!mine) {
@@ -136,9 +139,11 @@ function applyGlossary(phase, { force = false } = {}) {
   return true;
 }
 
+const FIXED_SOURCES = new Set(['bpm-note', 'bpm-export', 'summary', 'hr-raw']);
+
 function basisHtml(phase) {
-  if (phase.metSource === 'bpm-note' || phase.metSource === 'bpm-export' || phase.metSource === 'summary') {
-    const tag = phase.metSource === 'summary' ? 'From imported file' : phase.metSource === 'bpm-note' ? 'From day note' : 'Revised';
+  if (FIXED_SOURCES.has(phase.metSource)) {
+    const tag = { summary: 'From imported file', 'bpm-note': 'From day note', 'hr-raw': 'From heart rate' }[phase.metSource] || 'Revised';
     return `<span class="tag conf-high">${tag}</span><span class="basis-text">${esc(phase.metBasis)}</span>`;
   }
   if (phase.metAuto && phase.metBasis) {
@@ -290,7 +295,7 @@ function formTemplate(entry, calc) {
     </p>
     <pre class="format-sample">Date: 2026-09-18
 Shift: 8:08 AM - 3:18 PM
-Location: 200 Sherry Hl Trl, Madison, AL
+Location: 12 Example Rd, Springfield
 
 98° (Feels 104° Sunny)
 Breaks: 6
@@ -439,7 +444,7 @@ function resultsTemplate(calc) {
         <span>${p.soilCode ? `${p.soilCode} · ${esc(soilName(p.soilCode))}` : '—'}</span>
         <span>${hm(p.netMinutes)}</span>
         <span class="meter"><span style="width:${((p.netMinutes / maxNet) * 100).toFixed(1)}%"></span></span>
-        <span title="${esc(p.metBasis || (p.metAuto ? '' : 'Entered by hand'))}"><span class="conf-dot conf-${p.metSource === 'bpm-note' || p.metSource === 'bpm-export' || p.metSource === 'summary' ? 'high' : p.metAuto ? p.metConfidence || 'medium' : 'manual'}"></span>MET ${num(p.met, 1)}</span>
+        <span title="${esc(p.metBasis || (p.metAuto ? '' : 'Entered by hand'))}"><span class="conf-dot conf-${FIXED_SOURCES.has(p.metSource) ? 'high' : p.metAuto ? p.metConfidence || 'medium' : 'manual'}"></span>MET ${num(p.met, 1)}</span>
       </div>
     </li>`).join('');
 
@@ -502,12 +507,110 @@ function resultsTemplate(calc) {
         </table>
       </details>` : ''}
 
+      ${heartRateBlock(calc)}
+
       <details class="side-block" data-key="quality" ${warnCount ? 'open' : ''}>
         <summary>Data quality <span class="meta">${warnCount ? `${warnCount} warning${warnCount === 1 ? '' : 's'}` : `${calc.flags.length} note${calc.flags.length === 1 ? '' : 's'}`}</span></summary>
         <ul class="flags">${flags}</ul>
       </details>
     </div>
   </div>`;
+}
+
+/* ---------------------------- heart rate ---------------------------- */
+
+const clockText = (m) => {
+  const h = Math.floor(m / 60) % 24;
+  return `${h % 12 || 12}:${String(Math.round(m % 60)).padStart(2, '0')}${h < 12 ? 'a' : 'p'}`;
+};
+
+/**
+ * The day's watch readings as bars (each 30-min window's min–max) over the
+ * work window, with lunch and other excluded time shaded and the work-time
+ * average drawn across. The SVG stretches to the panel's width at a fixed
+ * height; the time labels are plain text under it so they stay readable.
+ */
+function heartRateChart(rows, hr) {
+  const win = hr.window;
+  const regular = rows.filter((r) => !r[4] || r[4] === 'exercising');
+  const near = regular.filter((r) => r[1] >= win.start - 60 && r[0] <= win.end + 60);
+  const from = Math.max(0, Math.min(win.start - 60, ...near.map((r) => r[0])));
+  const to = Math.min(1440, Math.max(win.end + 60, ...near.map((r) => r[1] + 1)));
+  const peak = Math.max(160, ...near.map((r) => r[3] + 5));
+  const floor = 40;
+  const x = (m) => (((Math.min(to, Math.max(from, m)) - from) / (to - from)) * 1000).toFixed(1);
+  const y = (bpm) => (2 + (1 - (bpm - floor) / (peak - floor)) * 96).toFixed(1);
+  const bars = near.map((r) => {
+    const inWork = r[0] < win.end && r[1] + 1 > win.start;
+    const cls = r[4] === 'exercising' ? 'hr-ex' : inWork ? 'hr-in' : 'hr-out';
+    const w = Math.max(3, x(r[1] + 1) - x(r[0]) - 4);
+    return `<rect class="${cls}" x="${x(r[0])}" y="${y(r[3])}" width="${w.toFixed(1)}" height="${Math.max(1, y(r[2]) - y(r[3])).toFixed(1)}"><title>${clockText(r[0])}–${clockText(r[1] + 1)} · ${r[2]}–${r[3]} bpm${r[4] ? ' · Exercising' : ''}</title></rect>`;
+  }).join('');
+  const excluded = (win.exclude || []).map(([a, b]) => `<rect class="hr-excl" x="${x(a)}" y="0" width="${Math.max(0, x(b) - x(a)).toFixed(1)}" height="100"/>`).join('');
+  const avg = hr.hr ? `<line class="hr-avg" x1="${x(win.start)}" x2="${x(win.end)}" y1="${y(hr.hr)}" y2="${y(hr.hr)}" vector-effect="non-scaling-stroke"/>` : '';
+  const ticks = [];
+  for (let t = Math.ceil(from / 120) * 120; t <= to; t += 120) {
+    const pct = x(t) / 10;
+    ticks.push(`<span class="${pct < 6 ? 'edge-l' : pct > 94 ? 'edge-r' : ''}" style="left:${pct.toFixed(1)}%">${clockText(t)}</span>`);
+  }
+  return `<figure class="hr-figure">
+    <svg class="hr-chart" viewBox="0 0 1000 100" preserveAspectRatio="none" role="img" aria-label="Watch heart rate across the day: work window ${win.label}${hr.hr ? `, average ${Math.round(hr.hr)} bpm` : ''}">
+      <rect class="hr-work" x="${x(win.start)}" y="0" width="${(x(win.end) - x(win.start)).toFixed(1)}" height="100"/>
+      ${excluded}${bars}${avg}
+    </svg>
+    <div class="hr-ticks" aria-hidden="true">${ticks.join('')}</div>
+  </figure>`;
+}
+
+/** The results-panel block for the day's raw heart-rate check. */
+function heartRateBlock(calc) {
+  const hr = calc.heartRate;
+  if (!hr) return '';
+  const rows = store.getHeartRate(calc.date) || [];
+  const s = store.getSettings();
+  let body;
+  if (hr.status === 'no-window') {
+    body = '<p class="hr-note">Readings are on file, but this day has no shift or phase times to line them up with work. Add the shift start and end to check the MET.</p>';
+  } else if (hr.status === 'no-readings') {
+    body = `${heartRateChart(rows, hr)}<p class="hr-note">The watch wasn’t recording during work time (${hr.window.label}), so there’s nothing to check the MET against.</p>`;
+  } else {
+    const stat = (label, value) => `<div><span class="mini-label">${label}</span><strong>${value}</strong></div>`;
+    const verdict = hr.status === 'sparse'
+      ? `<p class="hr-note">Only ${Math.round(hr.coverage * 100)}% of the work time was recorded — too little to judge the MET by. The day keeps its MET.</p>`
+      : hr.verdict === 'hr-only'
+        ? `<p class="hr-note">No task MET to compare with. From heart rate alone this day reads MET ${hr.suggested}.</p>`
+        : hr.verdict === 'agree'
+          ? `<p class="hr-verdict ok">Agrees with the day’s MET ${hr.dayMet.toFixed(2)} (within 0.5) — keep it.</p>`
+          : `<p class="hr-verdict warn">${Math.abs(hr.diff).toFixed(2)} ${hr.verdict === 'down' ? 'below' : 'above'} the day’s MET ${hr.dayMet.toFixed(2)}. §5 says revise ${hr.verdict}.</p>
+             <button type="button" class="btn sm primary" data-action="apply-hr-met">Use MET ${hr.suggested}</button>`;
+    body = `${heartRateChart(rows, hr)}
+      <div class="hr-stats">
+        ${stat('Work avg', `${Math.round(hr.hr)} bpm`)}
+        ${stat('HRR', `${Math.round(hr.hrr * 100)}%`)}
+        ${stat('HR MET', hr.met.toFixed(2))}
+        ${stat('Recorded', `${Math.round(hr.minutes)}/${Math.round(hr.span)} min`)}
+      </div>
+      ${verdict}`;
+  }
+  // Keyed by status and verdict, so a collapsed panel opens again when the
+  // verdict changes (a MET edited past the agreement band shows "Use MET").
+  const open = hr.status !== 'no-window';
+  return `<details class="side-block hr-block" data-key="hr-${hr.status}-${hr.verdict || ''}" ${open ? 'open' : ''}>
+    <summary>Heart rate <span class="meta">raw watch · no correction</span></summary>
+    ${body}
+    <p class="hint">Each bar is one 30-min window’s min–max; its middle counts. HRR = (HR − ${s.restingHr}) ÷ (${s.maxHr} − ${s.restingHr}); MET = 1 + 10 × HRR.</p>
+  </details>`;
+}
+
+/** Revise the open day to its heart-rate MET (the "Use MET" button). */
+function applyHeartRateMet(form) {
+  const calc = calculateDay(withResolvedWeight(draft), store.getSettings());
+  const revised = reviseToHeartRate(draft, calc.heartRate);
+  if (!revised) return;
+  draft.phases = revised.phases;
+  markDirty();
+  rebuildForm(form);
+  toast(`MET revised ${calc.heartRate.verdict} to ${calc.heartRate.suggested} on raw heart rate.`);
 }
 
 /* ---------------------- TDEE breakdown readout ---------------------- */
@@ -651,8 +754,12 @@ export function render(root) {
   });
   form.addEventListener('click', (e) => onClick(e, form));
   wireReadout(root.querySelector('#results'));
-  // "+ Add phase" in the result summary lives outside the form.
+  // "+ Add phase" and "Use MET" in the result summary live outside the form.
   root.querySelector('#results').addEventListener('click', (e) => {
+    if (e.target.closest('[data-action="apply-hr-met"]')) {
+      applyHeartRateMet(form);
+      return;
+    }
     if (!e.target.closest('[data-action="add-phase"]')) return;
     draft.phases.push(store.newPhase());
     markDirty();
@@ -891,6 +998,96 @@ function handleSummaryImport(text, filename, form) {
 }
 
 /**
+ * Stores a Samsung heart-rate export by date and checks every logged day it
+ * covers. Days whose MET the raw heart rate disagrees with are listed, and
+ * can all be revised at once; nothing changes until that button is pressed.
+ */
+function handleHeartRateImport(text, filename, form) {
+  const range = exportRange(filename);
+  const year = exportYear(filename, text) || Number(todayIso().slice(0, 4));
+  const readings = parseHeartRate(text, { year, range });
+  if (!readings.length) {
+    toast('No heart-rate readings could be read from that file.', 'warn');
+    return;
+  }
+  const dates = store.saveHeartRate(groupByDate(readings), { source: filename });
+  const settings = store.getSettings();
+  const groups = { revise: [], agree: [], sparse: [], noWindow: [], noReadings: [], hrOnly: [] };
+  let rest = 0;
+  let notLogged = 0;
+  for (const date of dates) {
+    const entry = store.getEntry(date);
+    if (!entry) {
+      notLogged += 1;
+      continue;
+    }
+    if (entry.restDay) {
+      rest += 1;
+      continue;
+    }
+    const hr = calculateDay(store.resolveEntry(entry), settings).heartRate;
+    if (!hr) continue;
+    if (hr.status === 'no-window') groups.noWindow.push(date);
+    else if (hr.status === 'no-readings') groups.noReadings.push(date);
+    else if (hr.status === 'sparse') groups.sparse.push({ date, hr });
+    else if (hr.verdict === 'hr-only') groups.hrOnly.push({ date, hr });
+    else if (hr.verdict === 'agree') groups.agree.push({ date, hr });
+    else groups.revise.push({ date, hr });
+  }
+
+  const checked = groups.revise.length + groups.agree.length;
+  toast(`Heart rate saved: ${readings.length.toLocaleString()} readings over ${dates.length} day${dates.length === 1 ? '' : 's'} (${dates[0]} to ${dates.at(-1)}), used as recorded — no correction.`);
+  if (checked) {
+    toast(groups.revise.length
+      ? `${groups.revise.length} of ${checked} checked work days disagree with their MET — see the summary to revise them.`
+      : `All ${checked} checked work days agree with their MET.`, groups.revise.length ? 'warn' : 'ok');
+  }
+
+  const line = ({ date, hr }) => `  ${date}  MET ${hr.dayMet.toFixed(2)} → ${hr.suggested}  (heart rate ${Math.round(hr.hr)} bpm, HRR ${Math.round(hr.hrr * 100)}% → MET ${hr.met.toFixed(2)}; ${Math.round(hr.minutes)}/${Math.round(hr.span)} min recorded)`;
+  const lines = [
+    `Read ${readings.length.toLocaleString()} heart-rate readings from ${filename}, ${dates[0]} to ${dates.at(-1)} (${dates.length} days).`,
+    `Each 30-min window counts at the middle of its min–max, as recorded (no +30/+35 correction). HRR = (HR − ${settings.restingHr}) ÷ (${settings.maxHr} − ${settings.restingHr}); MET = 1 + 10 × HRR.`,
+  ];
+  if (groups.revise.length) {
+    const down = groups.revise.filter((g) => g.hr.verdict === 'down').length;
+    lines.push('', `Heart rate disagrees with the day’s MET by more than 0.5 on ${groups.revise.length} day${groups.revise.length === 1 ? '' : 's'} (${down} lower, ${groups.revise.length - down} higher). §5: revise both ways.`, ...groups.revise.map(line));
+  }
+  if (groups.agree.length) lines.push('', `Agrees with the day’s MET (kept): ${groups.agree.map((g) => g.date).join(', ')}`);
+  if (groups.sparse.length) lines.push('', `Too little recorded during work to judge (under 60% of work minutes): ${groups.sparse.map((g) => g.date).join(', ')}`);
+  if (groups.hrOnly.length) lines.push('', 'Days with no task MET — what heart rate alone reads:', ...groups.hrOnly.map(({ date, hr }) => `  ${date}  MET ${hr.suggested} (${Math.round(hr.hr)} bpm)`));
+  if (groups.noWindow.length) lines.push('', `No shift or phase times, so the readings can’t be lined up with work (add the shift to check): ${groups.noWindow.join(', ')}`);
+  if (groups.noReadings.length) lines.push('', `The watch wasn’t recording during work: ${groups.noReadings.join(', ')}`);
+  if (rest || notLogged) lines.push('', `${rest ? `${rest} non-work day${rest === 1 ? '' : 's'}` : ''}${rest && notLogged ? ' and ' : ''}${notLogged ? `${notLogged} date${notLogged === 1 ? '' : 's'} not logged in the app` : ''} — readings stored, nothing to check.`);
+
+  openTextPanel({
+    title: 'Heart-rate import',
+    hint: groups.revise.length
+      ? 'Nothing has been changed yet. Revise every listed day now, or open a day and use “Use MET” in its heart-rate panel.'
+      : 'The readings are stored with each day; open a day to see its heart-rate panel.',
+    text: lines.join('\n'),
+    action: groups.revise.length ? {
+      label: `Revise ${groups.revise.length} day${groups.revise.length === 1 ? '' : 's'}`,
+      run: () => {
+        let done = 0;
+        for (const { date, hr } of groups.revise) {
+          const entry = store.getEntry(date);
+          const revised = entry && reviseToHeartRate(entry, hr);
+          if (revised) {
+            store.saveEntry(revised, { logWeight: false });
+            done += 1;
+          }
+        }
+        toast(`Revised ${done} day${done === 1 ? '' : 's'} to the heart-rate MET.`);
+        loadDate(draft.date);
+        rebuildForm(form);
+      },
+    } : null,
+  });
+  loadDate(draft.date);
+  rebuildForm(form);
+}
+
+/**
  * Reads a dropped/selected calendar log file, parses it, and merges the result
  * onto the current draft — switching days first if the file names a different
  * date. Fields the parser didn't confidently find are left exactly as they
@@ -911,8 +1108,15 @@ async function handleImportFile(e, form) {
       const buffer = await file.arrayBuffer();
       const { extractPdfText } = await import('../pdfText.js');
       text = await extractPdfText(buffer);
-    } else if (ext === 'xlsx' || ext === 'xls' || ext === 'numbers' || ext === 'ods') {
-      toast('Spreadsheet files can’t be read directly. Save the sheet as CSV (File → Download → .csv), or copy its rows and use “Paste text”.', 'warn');
+    } else if (ext === 'xlsx' || ext === 'xlsm') {
+      toast('Reading spreadsheet…');
+      text = spreadsheetText(await readXlsx(await file.arrayBuffer()));
+      if (text === null) {
+        toast(`${file.name} has no filled-in cells.`, 'warn');
+        return;
+      }
+    } else if (ext === 'xls' || ext === 'numbers' || ext === 'ods') {
+      toast(`.${ext} files can’t be read directly. Save the sheet as .xlsx or .csv (File → Save As / Download), or copy its rows and use “Paste text”.`, 'warn');
       return;
     } else {
       text = await file.text();
@@ -929,6 +1133,20 @@ async function handleImportFile(e, form) {
   importText(text, file.name, form);
 }
 
+/**
+ * The text of the workbook sheet worth importing: the first one that is a
+ * TDEE table (as CSV), else the first holding heart-rate rows, else the first
+ * with anything in it (calendar text typed into cells). Null if all are empty.
+ */
+function spreadsheetText(sheets) {
+  const filled = sheets.filter((sh) => sh.rows.length);
+  if (!filled.length) return null;
+  const table = filled.find((sh) => looksLikeSummaryTable(rowsToCsv(sh.rows)));
+  if (table) return rowsToCsv(table.rows);
+  const hr = filled.find((sh) => looksLikeHeartRateExport(rowsToText(sh.rows)));
+  return rowsToText((hr || filled[0]).rows);
+}
+
 /** Everything after the text is in hand — a picked file and pasted text both end up here. */
 function importText(text, filename, form) {
   // A day-by-day TDEE table (CSV, or rows copied from a spreadsheet).
@@ -938,11 +1156,18 @@ function importText(text, filename, form) {
     return;
   }
 
+  // A Samsung Health heart-rate export (its PDF, or its rows pasted).
+  if (looksLikeHeartRateExport(text)) {
+    flushSave();
+    handleHeartRateImport(text, filename, form);
+    return;
+  }
+
   // A calendar log always has a "Date:" or a "Shift:" line. Anything else (a
   // written report, notes) would otherwise be stamped onto one day with its
   // bullet points turned into tasks, so it is refused instead.
   if (!/^[ \t]*(?:[-*•][ \t]+)?\**[ \t]*(?:date|shift)[ \t]*\**[ \t]*:/im.test(text)) {
-    toast(`Nothing imported: ${filename} has no "Date:" or "Shift:" line, so it isn't a calendar log, and it isn't a TDEE table either. Reports and notes can't be imported as days.`, 'warn');
+    toast(`Nothing imported: ${filename} has no "Date:" or "Shift:" line, so it isn't a calendar log, and it isn't a TDEE table or a Samsung heart-rate export either. Reports and notes can't be imported as days.`, 'warn');
     return;
   }
 
@@ -996,7 +1221,7 @@ function onClick(e, form) {
   if (action === 'import-paste') {
     openPastePanel({
       title: 'Paste calendar text',
-      hint: 'Paste calendar text (one day or many, separated by ---), or rows copied from your TDEE spreadsheet or CSV — include the header row if you have it. Works anywhere a file picker doesn’t, such as inside a phone app.',
+      hint: 'Paste calendar text (one day or many, separated by ---), rows copied from your TDEE spreadsheet or CSV (include the header row if you have it), or the rows of a Samsung heart-rate export. Works anywhere a file picker doesn’t, such as inside a phone app.',
       submit: 'Import',
       onSubmit: (text) => importText(text, 'pasted text', form),
     });

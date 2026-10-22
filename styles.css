@@ -507,6 +507,28 @@ code { font: 500 0.9em var(--mono); background: var(--panel-2); border: 1px soli
 .flag.info .flag-dot { background: var(--blue); }
 .flag.ok .flag-dot { background: var(--green); }
 
+/* ---- heart-rate panel ---- */
+
+.hr-figure { margin: 12px 0 0; }
+.hr-chart { display: block; width: 100%; height: 112px; }
+.hr-chart .hr-work { fill: var(--green-soft); }
+.hr-chart .hr-excl { fill: var(--bg); opacity: 0.7; }
+.hr-chart .hr-in { fill: var(--green); }
+.hr-chart .hr-out { fill: var(--faint); }
+.hr-chart .hr-ex { fill: var(--amber); }
+.hr-chart .hr-avg { stroke: var(--text); stroke-width: 1; stroke-dasharray: 3 3; }
+.hr-ticks { position: relative; height: 16px; margin-top: 4px; }
+.hr-ticks span { position: absolute; transform: translateX(-50%); font: 500 10px var(--mono); color: var(--faint); white-space: nowrap; }
+.hr-ticks span.edge-l { transform: none; }
+.hr-ticks span.edge-r { transform: translateX(-100%); }
+.hr-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.hr-stats strong { display: block; margin-top: 2px; font: 600 14px var(--mono); font-variant-numeric: tabular-nums; }
+.hr-verdict { font-size: 13px; }
+.hr-verdict.ok { color: var(--green); }
+.hr-verdict.warn { color: var(--amber); }
+.hr-note { font-size: 13px; color: var(--dim); }
+.hr-block .hint { font-size: 11px; color: var(--faint); }
+
 /* ---- edit form ---- */
 
 .edit-head {

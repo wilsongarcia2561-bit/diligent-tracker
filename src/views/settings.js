@@ -1,6 +1,6 @@
 /** Settings — framework constants, the bodyweight log (§4), and local data management. */
 
-import { BMR_KCAL, DEFAULT_BREAK_MINUTES } from '../data.js';
+import { BMR_KCAL, DEFAULT_BREAK_MINUTES, MAX_HR, RESTING_HR } from '../data.js';
 import * as store from '../store.js';
 import { confirmClick, esc, kgToLb, lbToKg, num, openPastePanel, openTextPanel, toast, todayIso } from '../ui.js';
 
@@ -18,6 +18,7 @@ export function render(root, { onChange }) {
 function draw(root) {
   const s = store.getSettings();
   const weights = store.listWeights().slice().reverse();
+  const hrDates = store.heartRateDates();
 
   root.innerHTML = `
     <div class="card-head"><h2>Settings</h2></div>
@@ -71,6 +72,27 @@ function draw(root) {
     </section>
 
     <section class="card">
+      <h3>Watch heart rate <span class="sec-ref">§4</span></h3>
+      <p class="muted">Readings from a Samsung Health heart-rate export (Import from file on the Daily entry tab) are used as recorded — no correction — to check each work day’s MET.</p>
+      <div class="grid grid-2">
+        <label class="field">
+          <span class="field-label">Resting heart rate (bpm)</span>
+          <input type="number" data-setting="restingHr" value="${esc(s.restingHr)}" step="1" min="30" max="110">
+          <span class="hint">Spec value ${RESTING_HR}.</span>
+        </label>
+        <label class="field">
+          <span class="field-label">Max heart rate (bpm)</span>
+          <input type="number" data-setting="maxHr" value="${esc(s.maxHr)}" step="1" min="120" max="240">
+          <span class="hint">Spec value ${MAX_HR}. HRR = (HR − resting) ÷ (max − resting).</span>
+        </label>
+      </div>
+      ${hrDates.length
+        ? `<p class="muted small">Stored: ${hrDates.length} day${hrDates.length === 1 ? '' : 's'} of readings, ${esc(hrDates[0])} to ${esc(hrDates.at(-1))}.</p>
+           <div class="btn-row"><button type="button" class="btn danger" data-action="clear-hr">Remove heart-rate data</button></div>`
+        : '<p class="muted small">No heart-rate readings stored yet.</p>'}
+    </section>
+
+    <section class="card">
       <h3>Your data</h3>
       <p class="muted">Everything is kept in this browser’s local storage (and synced to your private area inside the artifact). Export regularly if the data matters.</p>
       <div class="btn-row">
@@ -84,7 +106,7 @@ function draw(root) {
 
     <section class="card">
       <h3>Sync across devices</h3>
-      <p class="muted">Inside the artifact, every day, weight reading and setting is also saved to your own private area, so your phone and laptop show the same data. Only you can read it, even if you share this page. This device keeps a working copy, so the app still opens instantly and works offline.</p>
+      <p class="muted">Inside the artifact, every day, its heart-rate readings, every weight reading and setting is also saved to your own private area, so your phone and laptop show the same data. Only you can read it, even if you share this page. This device keeps a working copy, so the app still opens instantly and works offline.</p>
       <p class="sync-line" data-sync-line data-state="off"></p>
       <div class="btn-row">
         <button type="button" class="btn" data-action="sync-now">Retry sync now</button>
@@ -159,6 +181,13 @@ function attach(root, onChange) {
           }
         },
       });
+    } else if (action === 'clear-hr') {
+      if (confirmClick(e.target, 'Remove all heart-rate readings? Click again')) {
+        store.clearHeartRate();
+        toast('Heart-rate readings removed', 'warn');
+        draw(root);
+        onChange?.();
+      }
     } else if (action === 'clear') {
       if (confirmClick(e.target, 'Erase everything? Click again')) {
         store.clearAll();

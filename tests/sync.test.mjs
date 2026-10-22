@@ -93,5 +93,62 @@ describe('sync bookkeeping and merging', () => {
     store.saveEntry({ ...store.getEntry('2026-10-09'), weightKg: 58.1 });
     assert.equal(store.listWeights().length, before + 1, 'a changed weight is logged');
   });
-});
 
+  it('stores watch heart rate per date and syncs it as r: documents', () => {
+    const seen = [];
+    const off = store.onLocalChange((k) => seen.push(k));
+    const dates = store.saveHeartRate({ '2026-10-07': [[480, 509, 95, 115, '']], '2026-10-06': [[480, 509, 90, 100, '']] }, { source: 'hr.pdf' });
+    off();
+    assert.deepEqual(dates, ['2026-10-06', '2026-10-07']);
+    assert.deepEqual(seen, ['r:2026-10-06', 'r:2026-10-07']);
+    assert.deepEqual(store.getHeartRate('2026-10-07'), [[480, 509, 95, 115, '']]);
+    assert.deepEqual(store.syncRecord('r:2026-10-07').v.rows, [[480, 509, 95, 115, '']]);
+    store.saveEntry(entry('2026-10-07'));
+    assert.deepEqual(store.resolveEntry(store.getEntry('2026-10-07')).watchHr, [[480, 509, 95, 115, '']]);
+    assert.equal('watchHr' in store.getEntry('2026-10-07'), false, 'readings are attached for calculating, never saved onto the day');
+  });
+
+  it('takes valid heart-rate documents from another device and refuses malformed ones', () => {
+    const rows = [[600, 629, 100, 120, 'exercising']];
+    assert.deepEqual(store.applyRemote([{ k: 'r:2026-10-08', at: later, del: false, v: { rows, source: 'x', at: later } }]), ['r:2026-10-08']);
+    assert.deepEqual(store.getHeartRate('2026-10-08'), rows);
+    assert.deepEqual(store.applyRemote([
+      { k: 'r:2026-10-09', at: later, v: { rows: 'nope' } },
+      { k: 'r:2026-10-09', at: later, v: { rows: [['a', 1, 2, 3]] } },
+      { k: 'r:not-a-date', at: later, v: { rows } },
+    ]), []);
+    store.applyRemote([{ k: 'r:2026-10-08', at: '3000-01-01T00:00:00.000Z', del: true, v: null }]);
+    assert.equal(store.getHeartRate('2026-10-08'), null);
+  });
+
+  it('erasing heart rate or everything tombstones the r: documents', () => {
+    store.saveHeartRate({ '2026-10-07': [[480, 509, 95, 115, '']] });
+    store.clearHeartRate();
+    assert.equal(store.syncRecord('r:2026-10-07').del, true);
+    store.saveHeartRate({ '2026-10-07': [[480, 509, 95, 115, '']] });
+    store.clearAll();
+    assert.equal(store.syncRecord('r:2026-10-07').del, true);
+    assert.deepEqual(store.heartRateDates(), []);
+  });
+
+  it('keeps plausible resting/max heart rate in settings and falls back on nonsense', () => {
+    store.updateSettings({ restingHr: 55, maxHr: 195 });
+    assert.equal(store.getSettings().restingHr, 55);
+    assert.equal(store.getSettings().maxHr, 195);
+    store.updateSettings({ restingHr: 4 });
+    assert.equal(store.getSettings().restingHr, 49);
+    store.applyRemote([{ k: 's', at: later, del: false, v: { bmr: 1436, restingHr: 'x', maxHr: 20 } }]);
+    assert.equal(store.getSettings().restingHr, 49);
+    assert.equal(store.getSettings().maxHr, 201);
+  });
+
+  it('a backup carries heart rate, and restoring one without it deletes what was there', () => {
+    store.saveHeartRate({ '2026-10-07': [[480, 509, 95, 115, '']] });
+    const backup = JSON.parse(store.exportJson());
+    assert.ok(backup.watchHr['2026-10-07']);
+    store.importJson(JSON.stringify({ entries: {}, weightLog: [], settings: {} }));
+    assert.equal(store.syncRecord('r:2026-10-07').del, true);
+    store.importJson(JSON.stringify(backup));
+    assert.deepEqual(store.getHeartRate('2026-10-07'), [[480, 509, 95, 115, '']]);
+  });
+});

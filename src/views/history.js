@@ -2,6 +2,7 @@
 
 import { groupByWeek, mainTask, trailingAverage } from '../analytics.js';
 import { calculateDay } from '../engine.js';
+import { EXPORT_COLUMNS } from '../summaryImport.js';
 import * as store from '../store.js';
 import { esc, kcal, num, openTextPanel } from '../ui.js';
 
@@ -47,17 +48,23 @@ function signed(n) {
   return `${r > 0 ? '+' : r < 0 ? '−' : ''}${Math.abs(r).toLocaleString()}`;
 }
 
+/** The day's work on the clock: "07:47-16:32", and lunch plus other non-work windows. */
+function clockColumns(entry) {
+  const shift = entry.shiftStart && entry.shiftEnd ? `${entry.shiftStart}-${entry.shiftEnd}` : '';
+  const windows = [
+    ...(entry.lunchStart && entry.lunchEnd ? [{ start: entry.lunchStart, end: entry.lunchEnd }] : []),
+    ...(Array.isArray(entry.nonLaborWindows) ? entry.nonLaborWindows : []),
+  ].filter((w) => w && w.start && w.end);
+  return [shift, windows.map((w) => `${w.start}-${w.end}`).join(' ')];
+}
+
 export function toCsv(rows) {
-  const header = [
-    'date', 'rest_day', 'main_task', 'net_work_minutes', 'feels_like_f', 'sites', 'weight_kg',
-    'bmr', 'active_kcal', 'neat_kcal', 'tef_kcal', 'background_kcal', 'tdee_kcal',
-    'kcal_raw_comparison', 'intake_kcal', 'balance_kcal', 'diligent_iv_tdee', 'flags',
-  ];
+  const header = EXPORT_COLUMNS;
   const lines = rows.map(({ entry, calc }) =>
     (calc.unusable
       ? [entry.date, 'false', mainTask(calc) || entry.taskLabel || '', '', calc.feelsLikeF ?? '', calc.siteCount, num(calc.weightKg, 1),
         Math.round(calc.components.bmr), '', '', '', '', '', '', calc.intakeKcal ?? '', '', calc.dataset?.tdee ?? '',
-        ['UNUSABLE', ...calc.flags.filter((f) => f.level !== 'info').map((f) => f.text)].join('; ')]
+        ['UNUSABLE', ...calc.flags.filter((f) => f.level !== 'info').map((f) => f.text)].join('; '), ...clockColumns(entry)]
       : [
       entry.date,
       calc.restDay ? 'true' : 'false',
@@ -77,6 +84,7 @@ export function toCsv(rows) {
       calc.balance === null ? '' : Math.round(calc.balance),
       calc.dataset?.tdee ?? '',
       calc.flags.map((f) => f.text).join('; '),
+      ...clockColumns(entry),
     ])
       .map((v) => {
         const s = String(v ?? '');
