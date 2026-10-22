@@ -938,6 +938,14 @@ function importText(text, filename, form) {
     return;
   }
 
+  // A calendar log always has a "Date:" or a "Shift:" line. Anything else (a
+  // written report, notes) would otherwise be stamped onto one day with its
+  // bullet points turned into tasks, so it is refused instead.
+  if (!/^[ \t]*(?:[-*•][ \t]+)?\**[ \t]*(?:date|shift)[ \t]*\**[ \t]*:/im.test(text)) {
+    toast(`Nothing imported: ${filename} has no "Date:" or "Shift:" line, so it isn't a calendar log, and it isn't a TDEE table either. Reports and notes can't be imported as days.`, 'warn');
+    return;
+  }
+
   // Land any unsaved edit before imported days are written, so a pending
   // timer can't overwrite an imported date with the older in-progress draft.
   flushSave();

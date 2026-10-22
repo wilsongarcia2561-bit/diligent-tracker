@@ -84,4 +84,14 @@ describe('sync bookkeeping and merging', () => {
     store.saveEntry(entry('2026-06-02', { weightKg: 58.2 }));
     assert.equal(store.listWeights().length, before + 1);
   });
+
+  it('logs a day\'s weight only when it is entered or changed, not on every re-save', () => {
+    const before = store.listWeights().length;
+    store.saveEntry(entry('2026-10-09', { weightKg: 57.6 }), { logWeight: false });
+    store.saveEntry({ ...store.getEntry('2026-10-09'), notes: 'edited' });
+    assert.equal(store.listWeights().length, before, 'an edit that leaves the weight alone does not log it');
+    store.saveEntry({ ...store.getEntry('2026-10-09'), weightKg: 58.1 });
+    assert.equal(store.listWeights().length, before + 1, 'a changed weight is logged');
+  });
 });
+

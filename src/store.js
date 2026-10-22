@@ -192,12 +192,16 @@ export function listEntries() {
 
 export function saveEntry(entry, { logWeight = true } = {}) {
   const at = nowIso();
+  const before = state.entries[entry.date];
   state.entries[entry.date] = { ...entry, updatedAt: at };
   touch(`e:${entry.date}`, { at });
-  // §4 — a per-entry fasted-morning weight also updates the weight log.
-  // An imported summary row carries the weight it was computed with; that is
-  // not a new weigh-in, so it stays on the day and out of the weight log.
-  if (logWeight && entry.weightKg !== '' && entry.weightKg !== null && Number(entry.weightKg) > 0) {
+  // §4 — a per-entry fasted-morning weight also updates the weight log, but
+  // only when it was just entered or changed. An imported summary row carries
+  // the weight it was computed with, and re-saving a day (any edit) must not
+  // log that weight again as a new weigh-in.
+  const weight = Number(entry.weightKg);
+  const changed = !before || Number(before.weightKg) !== weight;
+  if (logWeight && changed && entry.weightKg !== '' && entry.weightKg !== null && weight > 0) {
     upsertWeight({ date: entry.date, kg: Number(entry.weightKg), note: 'From daily entry' }, { silent: true });
   }
   persist();
