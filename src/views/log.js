@@ -23,7 +23,7 @@ import {
   calculateDay,
 } from '../engine.js';
 import { COMPONENTS, trailingAverage } from '../analytics.js';
-import { htmlToText, parseCalendarLog, parseMultiDayLog, splitDayBlocks } from '../calendarImport.js';
+import { htmlToText, looksLikeDayLog, parseCalendarLog, parseMultiDayLog, splitDayBlocks } from '../calendarImport.js';
 import { classifyTask, daySoil, isShadeDay } from '../metGlossary.js';
 import { looksLikeSummaryTable, parseSummaryTable } from '../summaryImport.js';
 import * as store from '../store.js';
@@ -51,6 +51,9 @@ let saveTimer = null;
  * otherwise the reload overwrites the unsaved edit, or the late timer saves
  * it onto whichever day was opened next.
  */
+/** A MET taken from the day's NOTE line. 'bpm-note' / 'bpm-export' are what older saves and exports called it. */
+const fromDayNote = (source) => source === 'note' || source === 'bpm-note' || source === 'bpm-export';
+
 export function flushSave() {
   clearTimeout(saveTimer);
   saveTimer = null;
@@ -119,7 +122,7 @@ function dayContext() {
  */
 function applyGlossary(phase, { force = false } = {}) {
   const manual = phase.met !== '' && phase.met !== null && !phase.metAuto;
-  if (!force && (manual || phase.metSource === 'bpm-note')) return false;
+  if (!force && (manual || fromDayNote(phase.metSource))) return false;
   const c = classifyTask(phase.description, { ...dayContext(), soilCode: phase.soilManual ? phase.soilCode : '' });
   if (c.nonLabor) {
     Object.assign(phase, {
@@ -137,8 +140,8 @@ function applyGlossary(phase, { force = false } = {}) {
 }
 
 function basisHtml(phase) {
-  if (phase.metSource === 'bpm-note' || phase.metSource === 'bpm-export' || phase.metSource === 'summary') {
-    const tag = phase.metSource === 'summary' ? 'From imported file' : phase.metSource === 'bpm-note' ? 'From day note' : 'Revised';
+  if (fromDayNote(phase.metSource) || phase.metSource === 'summary') {
+    const tag = phase.metSource === 'summary' ? 'From imported file' : fromDayNote(phase.metSource) ? 'From day note' : 'Revised';
     return `<span class="tag conf-high">${tag}</span><span class="basis-text">${esc(phase.metBasis)}</span>`;
   }
   if (phase.metAuto && phase.metBasis) {
@@ -439,7 +442,7 @@ function resultsTemplate(calc) {
         <span>${p.soilCode ? `${p.soilCode} · ${esc(soilName(p.soilCode))}` : '—'}</span>
         <span>${hm(p.netMinutes)}</span>
         <span class="meter"><span style="width:${((p.netMinutes / maxNet) * 100).toFixed(1)}%"></span></span>
-        <span title="${esc(p.metBasis || (p.metAuto ? '' : 'Entered by hand'))}"><span class="conf-dot conf-${p.metSource === 'bpm-note' || p.metSource === 'bpm-export' || p.metSource === 'summary' ? 'high' : p.metAuto ? p.metConfidence || 'medium' : 'manual'}"></span>MET ${num(p.met, 1)}</span>
+        <span title="${esc(p.metBasis || (p.metAuto ? '' : 'Entered by hand'))}"><span class="conf-dot conf-${fromDayNote(p.metSource) || p.metSource === 'summary' ? 'high' : p.metAuto ? p.metConfidence || 'medium' : 'manual'}"></span>MET ${num(p.met, 1)}</span>
       </div>
     </li>`).join('');
 
@@ -753,14 +756,16 @@ function handleBulkImport(text, filename, form) {
   const seen = new Map();
   const duplicates = [];
   const undated = [];
-  const skipped = { payroll: 0, undated: 0 };
+  const skipped = { payroll: 0, undated: 0, notLog: 0 };
   const totals = { phases: 0, fromNotes: 0, low: 0, needsMet: 0, excludedMinutes: 0 };
   const results = parseMultiDayLog(text, { filename });
 
   for (const result of results) {
     if (!result.patch) {
       if (result.skipped === 'payroll entry') skipped.payroll += 1;
-      else {
+      else if (result.skipped === 'not a day log') {
+        skipped.notLog += 1;
+      } else {
         skipped.undated += 1;
         undated.push(result.block.replace(/\s+/g, ' ').slice(0, 70));
       }
@@ -804,10 +809,11 @@ function handleBulkImport(text, filename, form) {
   if (summary) toast(summary, totals.low || totals.needsMet ? 'warn' : 'ok');
   if (skipped.payroll) toast(`Skipped ${skipped.payroll} payroll entr${skipped.payroll === 1 ? 'y' : 'ies'} — not a work log.`);
   if (skipped.undated) toast(`${skipped.undated} block(s) had no "Date:" line and were skipped entirely.`, 'warn');
+  if (skipped.notLog) toast(`${skipped.notLog} block(s) had no date, shift, lunch or temperature line, so they don’t look like day logs and were skipped.`, 'warn');
   if (duplicates.length) toast(`${duplicates.length} block(s) repeated a date — the later one replaced the earlier.`, 'warn');
 
   // Whenever the file held more blocks than days were saved, say exactly why.
-  if (duplicates.length || skipped.undated) {
+  if (duplicates.length || skipped.undated || skipped.notLog) {
     const lines = [
       `Found ${blocks} day block${blocks === 1 ? '' : 's'} in ${filename}.`,
       `Saved ${savedDates.length} day${savedDates.length === 1 ? '' : 's'}${savedDates.length ? ` (${savedDates[0]} to ${savedDates.at(-1)})` : ''}.`,
@@ -820,6 +826,7 @@ function handleBulkImport(text, filename, form) {
       lines.push('', `${skipped.undated} block(s) had no "Date:" line, so there was no day to put them on:`);
       lines.push(...undated.map((u) => `  “${u}…”`));
     }
+    if (skipped.notLog) lines.push('', `${skipped.notLog} block(s) had no date, shift, lunch or temperature line, so they were not treated as day logs.`);
     if (skipped.payroll) lines.push('', `${skipped.payroll} payroll entr${skipped.payroll === 1 ? 'y was' : 'ies were'} skipped.`);
     openTextPanel({ title: 'Import summary', hint: 'Why some blocks did not become their own day.', text: lines.join('\n') });
   }
@@ -944,6 +951,11 @@ function importText(text, filename, form) {
   const blocks = splitDayBlocks(text);
   if (blocks.length > 1) {
     handleBulkImport(text, filename, form);
+    return;
+  }
+
+  if (!looksLikeDayLog(text)) {
+    toast(`${filename} doesn’t look like a day log (no date, shift, lunch or temperature line), so nothing was imported and the open day is untouched.`, 'warn');
     return;
   }
 

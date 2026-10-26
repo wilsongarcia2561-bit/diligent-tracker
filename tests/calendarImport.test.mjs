@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { describe, it } from 'node:test';
 
-import { parseCalendarLog, parseMultiDayLog, splitDayBlocks } from '../src/calendarImport.js';
+import { looksLikeDayLog, parseCalendarLog, parseMultiDayLog, splitDayBlocks } from '../src/calendarImport.js';
 
 const FIXTURE_PATH = new URL('./fixtures/sample-multiday-log.md', import.meta.url);
 
@@ -350,10 +350,10 @@ describe('parseMultiDayLog — sanitized fixture built from real calendar data',
     assert.equal(returnPhase.end, '12:12');
   });
 
-  it('applies the BPM-confirmed revision from the Aug 31 note over the task-based estimate', () => {
+  it('applies the revision from the Aug 31 note over the task-based estimate', () => {
     const day = results.find((r) => r.patch.date === '2026-08-31').patch;
     assert.equal(day.phases[0].met, 7.5);
-    assert.equal(day.phases[0].metSource, 'bpm-note');
+    assert.equal(day.phases[0].metSource, 'note');
   });
 
   it('reads "Lunch break: post shift" as nothing to subtract, not as missing', () => {
@@ -469,7 +469,7 @@ describe('DILIGENT IV §8 data-quality flags from calendar text', () => {
     assert.match(flagsOf('Date: 2026-09-04\nShift: 7:39 AM - 4:38 PM\n\n1.)\n'), /task item is empty/);
   });
 
-  it('records a downward BPM revision with a warning, and says "downward" in the basis', () => {
+  it('records a downward revision with a warning, and says "downward" in the basis', () => {
     const { patch } = parseCalendarLog('Date: 2026-09-05\nShift: 7:00 AM - 2:00 PM\nFeels 106°\n\n• Put paverstone on implement stack areas, semi-rush\n\nNOTE: First downward MET revision — task read heavy (7.5) but HRR ~47%, revised to 6.0.');
     assert.equal(patch.phases[0].met, 6.0);
     assert.match(patch.phases[0].metBasis, /downward revision/);
@@ -522,5 +522,33 @@ describe('the calendar\'s own "1.)" layout', () => {
   it('recognizes "Plant & mulch day 2/2" style titles', () => {
     const { patch } = parseCalendarLog('Date: 2026-10-06\nShift: 1:03 PM - 4:54 PM\n\n• Plant & mulch day 2/2\n• 4-5 yards of mulch via wheelbarrow & hand throw');
     assert.equal(patch.phases.length, 1);
+  });
+});
+
+describe('calendar log import — text that is not a day log', () => {
+  // Shape of the report that was once imported over Sep 29: prose and bullets,
+  // a date and a break count lifted out of sentences, no day-log line at all.
+  const REPORT = `# Raw vs Corrected report
+
+**Window:** Sep 29 - Oct 16, 2026 | **Written:** Oct 16, 2026
+
+- **Oct 13 logs 0 breaks over 4h11m**, and Sep 30 logs 0 over 3h13m.
+- **Oct 15 lunch 10:14-1:13 is a three-hour lunch.** Either it is a typo or part of it was not lunch.
+- Fill in Oct 16 afternoon and actual end time.
+`;
+
+  it('rejects a report even though a date and break count can be read from its prose', () => {
+    assert.equal(looksLikeDayLog(REPORT), false);
+  });
+
+  it('skips a report block instead of making it a day', () => {
+    const [result] = parseMultiDayLog(REPORT, { filename: 'report.md' });
+    assert.equal(result.patch, null);
+  });
+
+  it('accepts a labeled day, raw calendar text, and a shift-only block', () => {
+    assert.equal(looksLikeDayLog('Date: 2026-09-18\n• dig'), true);
+    assert.equal(looksLikeDayLog(REAL_CALENDAR_TEXT), true);
+    assert.equal(looksLikeDayLog('Shift: 7:00 - 15:30\n• dig'), true);
   });
 });

@@ -26,7 +26,7 @@
  * Anything not on this list (weight, intake, notes) is left for manual entry.
  */
 
-import { bpmRevisionFromNotes, classifyTask, daySoil, isShadeDay, nonLaborReason } from './metGlossary.js';
+import { metRevisionFromNotes, classifyTask, daySoil, isShadeDay, nonLaborReason } from './metGlossary.js';
 
 const MONTHS = {
   jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
@@ -374,6 +374,24 @@ function nonLaborMinutes(block, ctx) {
  * @param {object} opts        { filename, fallbackDate }
  * @returns {{patch: object, matched: string[], unmatched: string[], optionalMissing: string[], metReport: object}}
  */
+/**
+ * Whether text is a day log at all. Everything the parser reads is optional,
+ * so without a check a report, a note or a spreadsheet printout would become a
+ * day — its bullets phases, a date lifted out of its prose. A day log has at
+ * least one line of its own that prose doesn't: a labeled date, shift or
+ * break count, a temperature reading, or a line that starts with "lunch".
+ * (A mention inside a sentence — "5 breaks", "lunch 10:14-1:13" — proves nothing.)
+ */
+export function looksLikeDayLog(text) {
+  const body = String(text || '');
+  return Boolean(
+    findLabeled(body, 'date', 'breaks?')
+      || parseShift(body)
+      || parseHeat(body)
+      || /^[ \t]*\(?[ \t]*lunch\b[^\n]*\d/im.test(body),
+  );
+}
+
 export function parseCalendarLog(text, opts = {}) {
   const body = String(text || '');
   const matched = [];
@@ -470,14 +488,14 @@ export function parseCalendarLog(text, opts = {}) {
   if (excludedMinutes) patch.transitMinutes = excludedMinutes;
 
   const importFlags = [];
-  const revision = bpmRevisionFromNotes(body);
+  const revision = metRevisionFromNotes(body);
   if (revision && phases.length) {
     for (const p of phases) {
       const prior = p.met === '' ? null : Number(p.met);
       // §5 — revision runs both directions; say which way it went.
       const direction = prior === null || prior === revision.met ? '' : prior > revision.met ? 'downward ' : 'upward ';
       p.met = revision.met;
-      p.metSource = 'bpm-note';
+      p.metSource = 'note';
       p.metConfidence = 'high';
       p.metBasis = `${revision.blended ? 'Blended day MET' : `MET ${direction}revision`} from the day's note (task-based estimate was ${prior ?? 'none'}): "${revision.line}"`;
       p.metNotes = (p.metNotes || []).filter((n) => n.level !== 'warn');
@@ -515,8 +533,8 @@ export function parseCalendarLog(text, opts = {}) {
 
   const metReport = {
     phases: phases.length,
-    fromNotes: phases.filter((p) => p.metSource === 'bpm-note').length,
-    low: phases.filter((p) => p.metSource !== 'bpm-note' && p.metConfidence === 'low').length,
+    fromNotes: phases.filter((p) => p.metSource === 'note').length,
+    low: phases.filter((p) => p.metSource !== 'note' && p.metConfidence === 'low').length,
     needsMet: phases.filter((p) => p.met === '').length,
     excludedMinutes,
   };
@@ -602,6 +620,9 @@ export function parseMultiDayLog(text, opts = {}) {
     // "STARTING PAY." / "PAY." all-day entries are payroll, not a work log (glossary §6).
     if (!/^\s*shift\s*:/im.test(block) && /\b(?:starting\s+)?pay\b\.?/i.test(block)) {
       return { block, patch: null, skipped: 'payroll entry', matched: [], unmatched: [] };
+    }
+    if (!looksLikeDayLog(block)) {
+      return { block, patch: null, skipped: 'not a day log', matched: [], unmatched: [] };
     }
     const filename = opts.filename;
     const result = parseCalendarLog(block, { filename });
