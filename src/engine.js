@@ -451,9 +451,10 @@ function heartRateFlag(hr, settings) {
   if (hr.verdict === 'agree') {
     return { level: 'info', text: `${base}. Agrees with the day’s MET ${hr.dayMet.toFixed(2)} (within ${HR_AGREEMENT_MET}) — keep it (§5).` };
   }
+  // Advisory only: the task MET stands unless the person chooses to revise it.
   return {
-    level: 'warn',
-    text: `${base}, ${Math.abs(hr.diff).toFixed(2)} ${hr.verdict === 'down' ? 'below' : 'above'} the day’s MET ${hr.dayMet.toFixed(2)}. §5: revise ${hr.verdict} to ${hr.suggested} — “Use MET ${hr.suggested}” in the day’s heart-rate panel does it.`,
+    level: 'info',
+    text: `${base}, ${Math.abs(hr.diff).toFixed(2)} ${hr.verdict === 'down' ? 'below' : 'above'} the day’s MET ${hr.dayMet.toFixed(2)}. The task MET is kept; if you want to revise it ${hr.verdict} to ${hr.suggested} (§5), “Use MET ${hr.suggested}” in the day’s heart-rate panel does it.`,
   };
 }
 
@@ -688,12 +689,12 @@ export function calculateDay(entry, settings = {}) {
     } else {
       const delta = tdee - doc.tdee;
       const off = Math.abs(delta) > 300;
-      // §6 figures were checked against corrected heart rate (+30/+35), which
-      // is retired: a day revised on raw heart rate is expected to land lower.
+      // §6 figures include MET revisions made on corrected heart rate (+30/+35),
+      // which is retired: a day that keeps its task MET can land below them.
       const lowerOnRawHr = off && delta < 0 && blendedMet !== null && blendedMet < doc.met;
       flags.push({
         level: off && !lowerOnRawHr ? 'warn' : 'info',
-        text: `DILIGENT IV §6 records ~${doc.tdee.toLocaleString()} kcal (MET ${doc.met}, ${doc.hours} active hr) for this day; the app computes ${Math.round(tdee).toLocaleString()} (${delta >= 0 ? '+' : '−'}${Math.abs(Math.round(delta)).toLocaleString()}).${lowerOnRawHr ? ' The §6 figure was checked against corrected heart rate (+30/+35), which is no longer used — a lower MET on raw heart rate explains the gap.' : off ? ' Outside the ±300 kcal precision floor — re-verify the stored day.' : ''}${doc.note ? ` ${doc.note}` : ''}`,
+        text: `DILIGENT IV §6 records ~${doc.tdee.toLocaleString()} kcal (MET ${doc.met}, ${doc.hours} active hr) for this day; the app computes ${Math.round(tdee).toLocaleString()} (${delta >= 0 ? '+' : '−'}${Math.abs(Math.round(delta)).toLocaleString()}).${lowerOnRawHr ? ' The §6 figure includes a MET revision made on corrected heart rate (+30/+35), which is no longer used — this day keeps its task MET, which explains the gap.' : off ? ' Outside the ±300 kcal precision floor — re-verify the stored day.' : ''}${doc.note ? ` ${doc.note}` : ''}`,
       });
     }
   }

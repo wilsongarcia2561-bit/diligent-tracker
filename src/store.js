@@ -242,15 +242,21 @@ function cleanWatchHr(saved) {
 }
 
 /**
- * Store a heart-rate export, one record per date. A date already on file is
- * replaced by the new export's readings for it — an export covers whole days.
+ * Store a heart-rate export, one record per date. Readings for a date already
+ * on file are merged in (duplicates dropped).
  * @param {Record<string, any[]>} byDate rows per date, as heartRate.groupByDate gives them
  */
 export function saveHeartRate(byDate, { source = '' } = {}) {
   const at = nowIso();
   const dates = Object.keys(byDate).filter(isDate).sort();
   for (const date of dates) {
-    state.watchHr[date] = { rows: byDate[date], source, at };
+    // Overlapping exports add to a day rather than replace it, so a partial
+    // first or last day of a newer export can't wipe out a fuller one.
+    const seen = new Set();
+    const rows = [...(state.watchHr[date]?.rows || []), ...byDate[date]]
+      .filter((r) => !seen.has(r.join('|')) && seen.add(r.join('|')))
+      .sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    state.watchHr[date] = { rows, source, at };
     touch(`r:${date}`, { at });
   }
   persist();

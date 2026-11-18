@@ -64,6 +64,7 @@ describe('reading a Samsung heart-rate export', () => {
     assert.equal(exportYear('export.pdf', 'Date of birth: Jan 1, 1990\nOct 21 2026'), 2026);
     assert.deepEqual(exportRange('Heart_rate_Jul222026-Oct212026.pdf'), { from: '2026-07-22', to: '2026-10-21' });
     assert.equal(exportRange('export.pdf'), null);
+    assert.equal(exportYear('Heart_rate_Jul202026-Oct212026.pdf', ''), 2026, 'a day-20 start must not read as 2020');
   });
 
   it('puts January rows of a December–January export in the later year', () => {
@@ -141,6 +142,14 @@ describe('raw heart rate over work time', () => {
     assert.equal(alone.verdict, 'hr-only');
     assert.equal(alone.suggested, 4.75);
     assert.equal(rawHrCheck([], win, { ...opts, dayMet: 6 }).status, 'no-readings');
+  });
+
+  it('subtracts overlapping excluded windows once', () => {
+    const r = [[780, 809, 100, 100, ''], [810, 839, 100, 100, '']];
+    const overlapping = [[790, 830], [800, 820]];
+    const st = windowStats(r, 780, 840, overlapping);
+    assert.equal(st.minutes, 20, 'minutes 780-790 and 830-840 remain');
+    assert.equal(rawHrCheck(r, { start: 780, end: 840, exclude: overlapping }, { restingHr: 49, maxHr: 201, dayMet: null }).span, 20);
   });
 
   it('parses clock strings', () => {

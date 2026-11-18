@@ -118,14 +118,14 @@ export function render(root) {
     <section class="card">
       <h3>Heart-rate check — raw watch readings <span class="sec-ref">§4 · §5</span></h3>
       <p class="muted">
-        Import the Samsung Health heart-rate PDF (or paste its rows) and each logged work day is checked against it. The
+        Import the Samsung Health heart-rate PDF (or paste its rows) and each logged work day is checked against it, without changing it. The
         watch’s numbers are used <strong>as recorded</strong>: the old +30 / +35 Samsung correction is retired.
       </p>
       <ol class="ref-list numbered">
         <li>Each 30-minute window gives a min–max; its middle is that window’s heart rate. “Exercising” segments overlap those windows and are only marked; single “Resting” spot readings are left out.</li>
         <li>Windows are weighted by the minutes they overlap the day’s work time — the shift (or its timed phases) minus lunch and other excluded windows.</li>
         <li>HRR = (HR − resting ${RESTING_HR}) ÷ (max ${MAX_HR} − ${RESTING_HR}), then MET = 1 + 10 × HRR up to 85% HRR, steeper above it (the §4 table as one line). Resting and max HR are in Settings.</li>
-        <li>Within 0.5 of the day’s MET → agrees, keep it. Further out → revise to the heart-rate MET, up or down (§5), from the day’s heart-rate panel or all at once after an import.</li>
+        <li>Within 0.5 of the day’s MET → agrees. Further out → heart rate reads differently; <strong>the task MET is kept</strong> and heart rate is only a check. §5 allows a revision either way, available as an optional “Use MET” button on the day or after an import — never applied automatically.</li>
         <li>Under 60% of work minutes recorded → too thin to judge; the day keeps its MET. A day with no task description can be reconstructed from heart rate alone (Tier D).</li>
       </ol>
       <table class="table compact">

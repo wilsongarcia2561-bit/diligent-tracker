@@ -42,6 +42,9 @@ const minutes = (h, m, ap) => {
 
 /** The year an export covers, from its filename ("Heart_rate_Jul222026-Oct212026.pdf") or text. */
 export function exportYear(filename = '', text = '') {
+  // The range first: in "Jul202026-Oct212026" a bare 20xx scan finds "2020".
+  const range = exportRange(filename);
+  if (range) return Number(range.from.slice(0, 4));
   const fromName = String(filename).match(/(20\d{2})/);
   if (fromName) return Number(fromName[1]);
   // Never the profile's date of birth.
@@ -139,8 +142,19 @@ export function clockMinutes(value) {
  * "Exercising" segments overlap the regular windows, so they are counted as
  * markers, not averaged in twice; "Resting" spot readings are ignored.
  */
-export function windowStats(readings, start, end, exclude = []) {
+/** Sorted, merged, non-null intervals — so overlapping excluded windows are never subtracted twice. */
+export function mergeIntervals(intervals) {
+  const out = [];
+  for (const [a, b] of [...intervals].filter(([a, b]) => a !== null && b !== null && b > a).sort((x, y) => x[0] - y[0])) {
+    if (out.length && a <= out.at(-1)[1]) out.at(-1)[1] = Math.max(out.at(-1)[1], b);
+    else out.push([a, b]);
+  }
+  return out;
+}
+
+export function windowStats(readings, start, end, excluded = []) {
   if (!Array.isArray(readings) || start === null || end === null || end <= start) return null;
+  const exclude = mergeIntervals(excluded);
   let w = 0;
   let sum = 0;
   let peak = 0;
@@ -157,7 +171,6 @@ export function windowStats(readings, start, end, exclude = []) {
     }
     let ov = Math.max(0, Math.min(end, rEnd) - Math.max(start, r.t));
     for (const [a, b] of exclude) {
-      if (a === null || b === null) continue;
       ov -= Math.max(0, Math.min(end, rEnd, b) - Math.max(start, r.t, a));
     }
     if (ov <= 0) continue;
@@ -179,7 +192,7 @@ export function windowStats(readings, start, end, exclude = []) {
  * from the day's MET suggests revising it, up or down.
  */
 export function rawHrCheck(rows, window, { dayMet = null, restingHr, maxHr, agreement = 0.5, minCoverage = 0.6 }) {
-  const exclude = window.exclude || [];
+  const exclude = mergeIntervals(window.exclude || []);
   const span = window.end - window.start - exclude.reduce((t, [a, b]) => t + Math.max(0, Math.min(window.end, b) - Math.max(window.start, a)), 0);
   const st = windowStats(rows, window.start, window.end, exclude);
   if (!st || !st.minutes) return { status: 'no-readings', span, minutes: 0, coverage: 0 };
