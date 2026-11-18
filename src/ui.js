@@ -93,8 +93,9 @@ export function confirmClick(btn, prompt = 'Click again to confirm') {
  * Shows exported text (CSV, JSON backup) in a dialog with a Copy button.
  * Copy-to-clipboard instead of a file download, because the hosted viewer
  * blocks every download a page starts; paste it into a file to keep it.
+ * An optional `action` ({ label, run }) adds a button that runs and closes.
  */
-export function openTextPanel({ title, hint, text }) {
+export function openTextPanel({ title, hint, text, action = null }) {
   const backdrop = document.createElement('div');
   backdrop.className = 'modal-backdrop';
   backdrop.innerHTML = `
@@ -107,7 +108,8 @@ export function openTextPanel({ title, hint, text }) {
       <textarea id="export-text" readonly spellcheck="false"></textarea>
       <div class="modal-actions">
         <button type="button" class="btn ghost" data-close>Close</button>
-        <button type="button" class="btn primary" data-copy>Copy to clipboard</button>
+        <button type="button" class="btn ${action ? 'ghost' : 'primary'}" data-copy>Copy to clipboard</button>
+        ${action ? `<button type="button" class="btn primary" data-run>${esc(action.label)}</button>` : ''}
       </div>
     </div>`;
   const area = backdrop.querySelector('textarea');
@@ -123,6 +125,9 @@ export function openTextPanel({ title, hint, text }) {
   backdrop.addEventListener('click', async (e) => {
     if (e.target === backdrop || e.target.closest('[data-close]')) {
       close();
+    } else if (action && e.target.closest('[data-run]')) {
+      close();
+      action.run();
     } else if (e.target.closest('[data-copy]')) {
       try {
         await navigator.clipboard.writeText(text);
@@ -135,7 +140,7 @@ export function openTextPanel({ title, hint, text }) {
     }
   });
   document.body.append(backdrop);
-  backdrop.querySelector('[data-copy]').focus();
+  backdrop.querySelector(action ? '[data-run]' : '[data-copy]').focus();
 }
 
 /* ------------------------------ motion ------------------------------ */

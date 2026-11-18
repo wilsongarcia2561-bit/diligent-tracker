@@ -14,12 +14,20 @@
  * "3,000"-style numbers. Pure functions — no DOM.
  */
 
-/** The app's own CSV export, which is also the order a headerless paste is read in. */
+/**
+ * The app's own CSV export, which is also the order a headerless paste is read
+ * in. `shift` ("07:47-16:32") and `excluded` ("11:39-14:36 09:26-09:46":
+ * lunch, travel and other non-work windows) only place the day's work on the
+ * clock, for lining it up with watch heart rate; net minutes still come from
+ * `net_work_minutes`. Older exports end at `flags` and still read.
+ */
 export const EXPORT_COLUMNS = [
   'date', 'rest_day', 'main_task', 'net_work_minutes', 'feels_like_f', 'sites', 'weight_kg',
   'bmr', 'active_kcal', 'neat_kcal', 'tef_kcal', 'background_kcal', 'tdee_kcal',
   'kcal_raw_comparison', 'intake_kcal', 'balance_kcal', 'diligent_iv_tdee', 'flags',
+  'shift', 'excluded',
 ];
+const LEGACY_COLUMN_COUNT = 18;
 
 const ALIASES = {
   date: ['date', 'day'],
@@ -42,6 +50,8 @@ const ALIASES = {
   intake_kcal: ['intake_kcal', 'intake'],
   steps: ['steps', 'step_count'],
   flags: ['flags', 'notes', 'note', 'comments'],
+  shift: ['shift', 'shift_window', 'shift_times', 'shift_time', 'work_window'],
+  excluded: ['excluded', 'excluded_windows', 'non_work_windows', 'nonwork_windows', 'excluded_time'],
 };
 
 const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
@@ -147,7 +157,30 @@ export function looksLikeSummaryTable(text) {
   const map = mapHeader(rows[0]);
   const numeric = ['tdee_kcal', 'active_kcal', 'net_work_minutes', 'active_hours', 'neat_kcal', 'tef_kcal', 'background_kcal', 'met'];
   if (map.date !== undefined && numeric.filter((k) => map[k] !== undefined).length >= 2) return true;
-  return Boolean(parseDate(rows[0][0])) && rows[0].length === EXPORT_COLUMNS.length;
+  return Boolean(parseDate(rows[0][0])) && (rows[0].length === EXPORT_COLUMNS.length || rows[0].length === LEGACY_COLUMN_COUNT);
+}
+
+/** "7:47 AM" / "07:47" / "16:32" → "HH:MM", or null. */
+function clockValue(value) {
+  const m = String(value || '').trim().match(/^(\d{1,2})[:.](\d{2})(?::\d{2})?\s*([ap])?\.?m?\.?$/i);
+  if (!m) return null;
+  let h = Number(m[1]);
+  if (h > 23 || Number(m[2]) > 59) return null;
+  if (m[3]) h = (h % 12) + (/p/i.test(m[3]) ? 12 : 0);
+  return `${String(h).padStart(2, '0')}:${m[2]}`;
+}
+
+const WINDOW = /(\d{1,2}[:.]\d{2}(?:\s*[ap]\.?m\.?)?)\s*(?:-|–|to)\s*(\d{1,2}[:.]\d{2}(?:\s*[ap]\.?m\.?)?)/gi;
+
+/** "07:47-16:32" or "11:39-14:36 09:26-09:46" → [{ start, end }…] in 24-hour "HH:MM". */
+export function parseWindows(value) {
+  const out = [];
+  for (const m of String(value || '').matchAll(WINDOW)) {
+    const start = clockValue(m[1]);
+    const end = clockValue(m[2]);
+    if (start && end) out.push({ start, end });
+  }
+  return out;
 }
 
 const round = (n, d = 3) => Math.round(n * 10 ** d) / 10 ** d;
@@ -210,6 +243,9 @@ export function parseSummaryTable(text, { filename = 'the file' } = {}) {
       tefKcal: given.tefKcal ?? '',
       backgroundKcal: given.backgroundKcal ?? '',
       intakeKcal: given.intakeKcal ?? '',
+      shiftStart: parseWindows(cell(row, 'shift'))[0]?.start || '',
+      shiftEnd: parseWindows(cell(row, 'shift'))[0]?.end || '',
+      nonLaborWindows: parseWindows(cell(row, 'excluded')),
       importFlags: flagText ? [{ level: 'info', text: `From ${filename}: ${flagText}` }] : [],
       notes: [`Imported from ${filename} (summary row).`, task ? `Task: ${task}` : null, flagText ? `Notes: ${flagText}` : null,
         tdee !== null ? `File figures: TDEE ${tdee}, active ${active ?? '—'}, NEAT ${given.neatKcal ?? '—'}, TEF ${given.tefKcal ?? '—'}, background ${given.backgroundKcal ?? '—'}.` : null]

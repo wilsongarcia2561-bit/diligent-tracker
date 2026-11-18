@@ -1,8 +1,8 @@
 /**
  * Cross-device sync through the artifact's `db` capability.
  *
- * Every day, the weight log and the settings are one
- * small document under the signed-in person's private area
+ * Every day, every day's watch heart rate, the weight log and the settings
+ * are one small document under the signed-in person's private area
  * (`data/users/<id>/…`), so only they can read it — even if the artifact is
  * shared. localStorage stays the working copy: the app renders from it
  * instantly, works offline, and this layer reconciles with the database in
@@ -31,9 +31,13 @@ function setStatus(patch) {
   listeners.forEach((fn) => fn(getStatus()));
 }
 
-/** "e:2026-09-09" ↔ "e_2026-09-09". Document ids may not contain ":"-free ambiguity, so keep them plain. */
+/**
+ * "e:2026-09-09" ↔ "e_2026-09-09" (a day), "r:…" ↔ "r_…" (that day's watch
+ * heart rate). Anything else in the collection — such as "h_…" documents
+ * left by the retired corrected-BPM framework — is ignored.
+ */
 const docIdFor = (key) => (key === 'w' ? 'weights' : key === 's' ? 'settings' : `${key[0]}_${key.slice(2)}`);
-const keyFor = (id) => (id === 'weights' ? 'w' : id === 'settings' ? 's' : /^e_\d{4}-\d{2}-\d{2}$/.test(id) ? `${id[0]}:${id.slice(2)}` : null);
+const keyFor = (id) => (id === 'weights' ? 'w' : id === 'settings' ? 's' : /^[er]_\d{4}-\d{2}-\d{2}$/.test(id) ? `${id[0]}:${id.slice(2)}` : null);
 
 let col = null;
 let unsubscribe = null;

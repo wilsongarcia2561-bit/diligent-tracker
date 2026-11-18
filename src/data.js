@@ -24,6 +24,19 @@ export const HEAT_TRIGGER_F = 88;
 /** §3.3 — KRI was retired on this date; every day, before or after, is restated under Intermediate. */
 export const KRI_RETIRED_ON = '2026-09-03';
 
+/**
+ * §1 / §4 — heart-rate baselines for HRR = (HR − 49) / (201 − 49). The watch's
+ * readings are used as recorded: the old +30 / +35 Samsung correction is retired.
+ */
+export const RESTING_HR = 49;
+export const MAX_HR = 201;
+
+/** §5 — a heart-rate MET within this of the day's MET agrees with it; further out, revise (either way). */
+export const HR_AGREEMENT_MET = 0.5;
+
+/** Below this share of work minutes covered by watch readings, the day is too thinly recorded to check. */
+export const HR_MIN_COVERAGE = 0.6;
+
 /** §1 — bodyweight constant, updated only from fasted morning post-bathroom readings. */
 export const DEFAULT_WEIGHT_KG = 57.6;
 
@@ -226,6 +239,7 @@ export const SOIL_KEYWORDS = {
 export const KNOWN_LIMITATIONS = [
   'MET values are population averages with real individual variance. This framework should never claim single-day precision better than roughly ±300–500 kcal.',
   'Samsung "Total burned calories" is not TDEE. Never reference it.',
+  'Watch heart rate is used exactly as recorded — no correction. Each 30-minute window only gives a min–max range; the app reads its middle, which also takes in any breaks inside that window.',
   'Background and NEAT lines are lower-confidence estimates and are visually distinguished from the active-kcal calculation throughout this app.',
   'The ~1,950 kcal non-work / university day is still unvalidated — it needs a full uni-day HR export paired with that day\'s step count.',
   'Body composition from the Oxiline BIA scale is low-confidence (hydration-sensitive) even with function restored. A DEXA scan is the recommended ground truth.',

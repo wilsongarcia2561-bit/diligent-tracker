@@ -80,7 +80,7 @@ describe('calendar log import — real calendar text', () => {
 describe('calendar log import — labeled header format', () => {
   const text = `Date: September 18, 2026
 Shift: 8:08 AM - 3:18 PM
-Location: 200 Sherry Hl Trl, Madison, AL
+Location: 12 Example Rd, Springfield
 
 Temp: 98F
 Feels-like: 104F

@@ -14,7 +14,7 @@
  *
  *   Date: 2026-09-18
  *   Shift: 08:08 - 15:18            (24h, or "8:08 AM - 3:18 PM")
- *   Location: 200 Sherry Hl Trl     (repeat for multiple sites)
+ *   Location: 12 Example Rd         (repeat for multiple sites)
  *
  *   98° (Feels 104° Sunny)          (or "Temp: 98F" / "Feels-like: 104F")
  *   Breaks: 6

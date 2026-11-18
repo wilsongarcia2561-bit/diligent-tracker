@@ -5,14 +5,17 @@ import {
   BMR_KCAL,
   DATASET_IV,
   KNOWN_LIMITATIONS,
+  MAX_HR,
   NEAT_TIERS,
   NON_WORK_DAY,
   OUT_OF_SCOPE,
+  RESTING_HR,
   SOIL_CLASSES,
   TASK_METS,
   TEF_BASELINE_KCAL,
 } from '../data.js';
 import { MODEL_FORMULAS, MODEL_LABELS, MODEL } from '../engine.js';
+import { metFromHrr } from '../heartRate.js';
 import { ANCHORS, NON_LABOR, SOIL_TIERS } from '../metGlossary.js';
 import { esc } from '../ui.js';
 
@@ -105,10 +108,32 @@ export function render(root) {
       <ol class="ref-list numbered">
         <li>Primary input: task description + soil classification from the calendar log.</li>
         <li>A revision written in the day's NOTE line ("revised to MET 7.5") replaces the task-based MET, and the day says so.</li>
+        <li>Watch heart rate, when a Samsung export is imported, checks the day's MET (below): within 0.5 it agrees and the MET stays; further out, revise to the heart-rate MET.</li>
         <li>Revision runs both directions. Sept 5 was the first downward revision (7.5 → 6.0); record downward revisions with the same prominence as upward ones.</li>
         <li>Heat index 88°F+ confirms upper-range MET assignments but does not independently raise the MET value.</li>
         <li>Multi-task days: split into phases by task description and calendar timestamps, assign MET per phase, and weight active kcal by net time per phase.</li>
       </ol>
+    </section>
+
+    <section class="card">
+      <h3>Heart-rate check — raw watch readings <span class="sec-ref">§4 · §5</span></h3>
+      <p class="muted">
+        Import the Samsung Health heart-rate PDF (or paste its rows) and each logged work day is checked against it. The
+        watch’s numbers are used <strong>as recorded</strong>: the old +30 / +35 Samsung correction is retired.
+      </p>
+      <ol class="ref-list numbered">
+        <li>Each 30-minute window gives a min–max; its middle is that window’s heart rate. “Exercising” segments overlap those windows and are only marked; single “Resting” spot readings are left out.</li>
+        <li>Windows are weighted by the minutes they overlap the day’s work time — the shift (or its timed phases) minus lunch and other excluded windows.</li>
+        <li>HRR = (HR − resting ${RESTING_HR}) ÷ (max ${MAX_HR} − ${RESTING_HR}), then MET = 1 + 10 × HRR up to 85% HRR, steeper above it (the §4 table as one line). Resting and max HR are in Settings.</li>
+        <li>Within 0.5 of the day’s MET → agrees, keep it. Further out → revise to the heart-rate MET, up or down (§5), from the day’s heart-rate panel or all at once after an import.</li>
+        <li>Under 60% of work minutes recorded → too thin to judge; the day keeps its MET. A day with no task description can be reconstructed from heart rate alone (Tier D).</li>
+      </ol>
+      <table class="table compact">
+        <thead><tr><th>HRR</th><th>MET</th></tr></thead>
+        <tbody>
+          ${[[0.35, 0.45], [0.45, 0.55], [0.55, 0.65], [0.65, 0.75], [0.75, 0.85], [0.85, 0.95]].map(([a, b]) => `<tr><td class="mono">${Math.round(a * 100)}–${Math.round(b * 100)}%</td><td class="mono">${metFromHrr(a).toFixed(1)}–${metFromHrr(b).toFixed(1)}</td></tr>`).join('')}
+        </tbody>
+      </table>
     </section>
 
     <section class="card">
