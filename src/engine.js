@@ -423,7 +423,13 @@ export function workWindow(entry) {
   const timed = labor.map((p) => pair(p.start, p.end));
   if (labor.length && timed.every(Boolean)) {
     const spans = timed.sort((a, b) => a[0] - b[0]);
-    for (let i = 1; i < spans.length; i += 1) if (spans[i][0] > spans[i - 1][1]) exclude.push([spans[i - 1][1], spans[i][0]]);
+    // A phase nested inside an earlier, longer one leaves no gap, so measure
+    // each gap from the furthest end reached so far, not from the previous phase.
+    let reach = spans[0][1];
+    for (let i = 1; i < spans.length; i += 1) {
+      if (spans[i][0] > reach) exclude.push([reach, spans[i][0]]);
+      reach = Math.max(reach, spans[i][1]);
+    }
     const start = spans[0][0];
     const end = Math.max(...spans.map((x) => x[1]));
     return { start, end, exclude, source: 'phases', label: `${clock(start)}–${clock(end)}` };

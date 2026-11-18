@@ -136,31 +136,40 @@ export function clockMinutes(value) {
 }
 
 /**
+ * Excluded intervals as a sorted, non-overlapping list. Lunch, the gap between
+ * two timed phases and a documented non-work window often name the same hour;
+ * subtracting each one separately would take that hour off twice.
+ */
+export function mergeIntervals(list) {
+  const spans = (Array.isArray(list) ? list : [])
+    .filter((x) => Array.isArray(x) && Number.isFinite(x[0]) && Number.isFinite(x[1]) && x[1] > x[0])
+    .map(([a, b]) => [a, b])
+    .sort((p, q) => p[0] - q[0]);
+  const out = [];
+  for (const [a, b] of spans) {
+    const last = out.at(-1);
+    if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+    else out.push([a, b]);
+  }
+  return out;
+}
+
+/**
  * Minute-weighted heart rate over [start, end) minus excluded intervals
  * (lunch, documented non-work). Each regular window counts for the minutes
  * it overlaps; its heart rate is the middle of its min–max, uncorrected.
  * "Exercising" segments overlap the regular windows, so they are counted as
  * markers, not averaged in twice; "Resting" spot readings are ignored.
  */
-/** Sorted, merged, non-null intervals — so overlapping excluded windows are never subtracted twice. */
-export function mergeIntervals(intervals) {
-  const out = [];
-  for (const [a, b] of [...intervals].filter(([a, b]) => a !== null && b !== null && b > a).sort((x, y) => x[0] - y[0])) {
-    if (out.length && a <= out.at(-1)[1]) out.at(-1)[1] = Math.max(out.at(-1)[1], b);
-    else out.push([a, b]);
-  }
-  return out;
-}
-
-export function windowStats(readings, start, end, excluded = []) {
+export function windowStats(readings, start, end, exclude = []) {
   if (!Array.isArray(readings) || start === null || end === null || end <= start) return null;
-  const exclude = mergeIntervals(excluded);
   let w = 0;
   let sum = 0;
   let peak = 0;
   let low = Infinity;
   let exercising = 0;
   let covered = 0;
+  const skip = mergeIntervals(exclude);
   for (const raw of readings) {
     const r = toRow(raw);
     if (r.tag === 'resting' || r.tag === 'sleep') continue;
@@ -170,9 +179,7 @@ export function windowStats(readings, start, end, excluded = []) {
       continue;
     }
     let ov = Math.max(0, Math.min(end, rEnd) - Math.max(start, r.t));
-    for (const [a, b] of exclude) {
-      ov -= Math.max(0, Math.min(end, rEnd, b) - Math.max(start, r.t, a));
-    }
+    for (const [a, b] of skip) ov -= Math.max(0, Math.min(end, rEnd, b) - Math.max(start, r.t, a));
     if (ov <= 0) continue;
     w += ov;
     sum += ((r.lo + r.hi) / 2) * ov;
@@ -192,7 +199,7 @@ export function windowStats(readings, start, end, excluded = []) {
  * from the day's MET suggests revising it, up or down.
  */
 export function rawHrCheck(rows, window, { dayMet = null, restingHr, maxHr, agreement = 0.5, minCoverage = 0.6 }) {
-  const exclude = mergeIntervals(window.exclude || []);
+  const exclude = mergeIntervals(window.exclude);
   const span = window.end - window.start - exclude.reduce((t, [a, b]) => t + Math.max(0, Math.min(window.end, b) - Math.max(window.start, a)), 0);
   const st = windowStats(rows, window.start, window.end, exclude);
   if (!st || !st.minutes) return { status: 'no-readings', span, minutes: 0, coverage: 0 };

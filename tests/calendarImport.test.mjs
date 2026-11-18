@@ -353,7 +353,7 @@ describe('parseMultiDayLog — sanitized fixture built from real calendar data',
   it('applies the BPM-confirmed revision from the Aug 31 note over the task-based estimate', () => {
     const day = results.find((r) => r.patch.date === '2026-08-31').patch;
     assert.equal(day.phases[0].met, 7.5);
-    assert.equal(day.phases[0].metSource, 'bpm-note');
+    assert.equal(day.phases[0].metSource, 'note');
   });
 
   it('reads "Lunch break: post shift" as nothing to subtract, not as missing', () => {

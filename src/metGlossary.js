@@ -17,7 +17,7 @@
  *      averaged; a dingo clause splits machine/manual evenly (§2).
  *   5. §2/§5 deltas (loaded wheelbarrow, machete, rush, incline…), then the
  *      §9 sanity clamp to 3.5–9.0.
- * A MET revision written in the day's NOTE line overrides all of this — see bpmRevisionFromNotes.
+ * A MET revision written in the day's NOTE line overrides all of this — see metRevisionFromNotes.
  */
 
 import { suggestMet } from './engine.js';
@@ -353,11 +353,11 @@ export function classifyTask(text, ctx = {}) {
 }
 
 /**
- * BPM-confirmed revisions written into a day's NOTE lines ("revised to MET
+ * MET revisions written into a day's NOTE lines ("revised to MET
  * 7.5", "Revised up to MET 9.0", "Blended MET 7.12 …"). The glossary never
  * overrides these (§ footer), so they win over any task-based estimate.
  */
-export function bpmRevisionFromNotes(text) {
+export function metRevisionFromNotes(text) {
   for (const line of String(text || '').split(/\r?\n/)) {
     if (!/^\s*(?:[•\-*+]\s*)?note\b/i.test(line)) continue;
     const m = line.match(/\brevised?\s+(?:up|down(?:ward)?)?\s*to\s+(?:MET\s*)?(\d{1,2}(?:\.\d+)?)/i)

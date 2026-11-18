@@ -25,7 +25,7 @@ import {
 } from '../engine.js';
 import { exportRange, exportYear, groupByDate, looksLikeHeartRateExport, parseHeartRate } from '../heartRate.js';
 import { COMPONENTS, trailingAverage } from '../analytics.js';
-import { htmlToText, parseCalendarLog, parseMultiDayLog, splitDayBlocks } from '../calendarImport.js';
+import { htmlToText, looksLikeDayLog, parseCalendarLog, parseMultiDayLog, splitDayBlocks } from '../calendarImport.js';
 import { classifyTask, daySoil, isShadeDay } from '../metGlossary.js';
 import { looksLikeSummaryTable, parseSummaryTable } from '../summaryImport.js';
 import * as store from '../store.js';
@@ -54,6 +54,9 @@ let saveTimer = null;
  * otherwise the reload overwrites the unsaved edit, or the late timer saves
  * it onto whichever day was opened next.
  */
+/** A MET taken from the day's NOTE line. 'bpm-note' / 'bpm-export' are what older saves and exports called it. */
+const fromDayNote = (source) => source === 'note' || source === 'bpm-note' || source === 'bpm-export';
+
 export function flushSave() {
   clearTimeout(saveTimer);
   saveTimer = null;
@@ -122,7 +125,7 @@ function dayContext() {
  */
 function applyGlossary(phase, { force = false } = {}) {
   const manual = phase.met !== '' && phase.met !== null && !phase.metAuto;
-  if (!force && (manual || phase.metSource === 'bpm-note')) return false;
+  if (!force && (manual || fromDayNote(phase.metSource))) return false;
   const c = classifyTask(phase.description, { ...dayContext(), soilCode: phase.soilManual ? phase.soilCode : '' });
   if (c.nonLabor) {
     Object.assign(phase, {
@@ -139,11 +142,11 @@ function applyGlossary(phase, { force = false } = {}) {
   return true;
 }
 
-const FIXED_SOURCES = new Set(['bpm-note', 'bpm-export', 'summary', 'hr-raw']);
+const FIXED_SOURCES = new Set(['note', 'bpm-note', 'bpm-export', 'summary', 'hr-raw']);
 
 function basisHtml(phase) {
   if (FIXED_SOURCES.has(phase.metSource)) {
-    const tag = { summary: 'From imported file', 'bpm-note': 'From day note', 'hr-raw': 'From heart rate' }[phase.metSource] || 'Revised';
+    const tag = { summary: 'From imported file', note: 'From day note', 'bpm-note': 'From day note', 'hr-raw': 'From heart rate' }[phase.metSource] || 'Revised';
     return `<span class="tag conf-high">${tag}</span><span class="basis-text">${esc(phase.metBasis)}</span>`;
   }
   if (phase.metAuto && phase.metBasis) {
@@ -860,14 +863,16 @@ function handleBulkImport(text, filename, form) {
   const seen = new Map();
   const duplicates = [];
   const undated = [];
-  const skipped = { payroll: 0, undated: 0 };
+  const skipped = { payroll: 0, undated: 0, notLog: 0 };
   const totals = { phases: 0, fromNotes: 0, low: 0, needsMet: 0, excludedMinutes: 0 };
   const results = parseMultiDayLog(text, { filename });
 
   for (const result of results) {
     if (!result.patch) {
       if (result.skipped === 'payroll entry') skipped.payroll += 1;
-      else {
+      else if (result.skipped === 'not a day log') {
+        skipped.notLog += 1;
+      } else {
         skipped.undated += 1;
         undated.push(result.block.replace(/\s+/g, ' ').slice(0, 70));
       }
@@ -911,10 +916,11 @@ function handleBulkImport(text, filename, form) {
   if (summary) toast(summary, totals.low || totals.needsMet ? 'warn' : 'ok');
   if (skipped.payroll) toast(`Skipped ${skipped.payroll} payroll entr${skipped.payroll === 1 ? 'y' : 'ies'} — not a work log.`);
   if (skipped.undated) toast(`${skipped.undated} block(s) had no "Date:" line and were skipped entirely.`, 'warn');
+  if (skipped.notLog) toast(`${skipped.notLog} block(s) had no date, shift, lunch or temperature line, so they don’t look like day logs and were skipped.`, 'warn');
   if (duplicates.length) toast(`${duplicates.length} block(s) repeated a date — the later one replaced the earlier.`, 'warn');
 
   // Whenever the file held more blocks than days were saved, say exactly why.
-  if (duplicates.length || skipped.undated) {
+  if (duplicates.length || skipped.undated || skipped.notLog) {
     const lines = [
       `Found ${blocks} day block${blocks === 1 ? '' : 's'} in ${filename}.`,
       `Saved ${savedDates.length} day${savedDates.length === 1 ? '' : 's'}${savedDates.length ? ` (${savedDates[0]} to ${savedDates.at(-1)})` : ''}.`,
@@ -927,6 +933,7 @@ function handleBulkImport(text, filename, form) {
       lines.push('', `${skipped.undated} block(s) had no "Date:" line, so there was no day to put them on:`);
       lines.push(...undated.map((u) => `  “${u}…”`));
     }
+    if (skipped.notLog) lines.push('', `${skipped.notLog} block(s) had no date, shift, lunch or temperature line, so they were not treated as day logs.`);
     if (skipped.payroll) lines.push('', `${skipped.payroll} payroll entr${skipped.payroll === 1 ? 'y was' : 'ies were'} skipped.`);
     openTextPanel({ title: 'Import summary', hint: 'Why some blocks did not become their own day.', text: lines.join('\n') });
   }
@@ -1170,11 +1177,12 @@ function importText(text, filename, form) {
     return;
   }
 
-  // A calendar log always has a "Date:" or a "Shift:" line. Anything else (a
-  // written report, notes) would otherwise be stamped onto one day with its
-  // bullet points turned into tasks, so it is refused instead.
-  if (!/^[ \t]*(?:[-*•][ \t]+)?\**[ \t]*(?:date|shift)[ \t]*\**[ \t]*:/im.test(text)) {
-    toast(`Nothing imported: ${filename} has no "Date:" or "Shift:" line, so it isn't a calendar log, and it isn't a TDEE table or a Samsung heart-rate export either. Reports and notes can't be imported as days.`, 'warn');
+  // A calendar log carries a labeled date or shift, a temperature, a break count
+  // or a lunch line. Anything else (a written report, notes) would otherwise be
+  // stamped onto one day with its bullet points turned into tasks, so it is
+  // refused instead. Raw event text with no "Date:" line still goes through.
+  if (!looksLikeDayLog(text)) {
+    toast(`Nothing imported: ${filename} has no date, shift, temperature, break or lunch line, so it isn't a calendar log, and it isn't a TDEE table or a Samsung heart-rate export either. Reports and notes can't be imported as days.`, 'warn');
     return;
   }
 

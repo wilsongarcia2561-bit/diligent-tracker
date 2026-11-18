@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { bpmRevisionFromNotes, classifySoil, classifyTask, daySoil, nonLaborReason } from '../src/metGlossary.js';
+import { metRevisionFromNotes, classifySoil, classifyTask, daySoil, nonLaborReason } from '../src/metGlossary.js';
 
 const close = (actual, expected) => assert.ok(Math.abs(actual - expected) < 0.01, `expected ${actual} ≈ ${expected}`);
 const hot = { feelsLikeF: 100 };
@@ -145,17 +145,17 @@ describe('§6 non-labor', () => {
 
 describe('BPM-confirmed revisions in NOTE lines', () => {
   it('reads "revised to MET", "revised up to MET" and "blended MET"', () => {
-    assert.equal(bpmRevisionFromNotes('NOTE: HR showed … revised to MET 7.5 in DILIGENT.md against a task-only estimate of MET 5.5.').met, 7.5);
-    assert.equal(bpmRevisionFromNotes('NOTE: Revised up to MET 9.0 against a task-based estimate of 6.75').met, 9.0);
-    assert.equal(bpmRevisionFromNotes('NOTE: First downward MET revision — task read heavy (7.5) but HRR ~47%, revised to 6.0. See DILIGENT.md.').met, 6.0);
-    const blended = bpmRevisionFromNotes('NOTE: heavy stretch 10:30-11:43 AM. Blended MET 7.12 (8.0 morning / 5.5 afternoon) rather than one flat value.');
+    assert.equal(metRevisionFromNotes('NOTE: HR showed … revised to MET 7.5 in DILIGENT.md against a task-only estimate of MET 5.5.').met, 7.5);
+    assert.equal(metRevisionFromNotes('NOTE: Revised up to MET 9.0 against a task-based estimate of 6.75').met, 9.0);
+    assert.equal(metRevisionFromNotes('NOTE: First downward MET revision — task read heavy (7.5) but HRR ~47%, revised to 6.0. See DILIGENT.md.').met, 6.0);
+    const blended = metRevisionFromNotes('NOTE: heavy stretch 10:30-11:43 AM. Blended MET 7.12 (8.0 morning / 5.5 afternoon) rather than one flat value.');
     assert.equal(blended.met, 7.12);
     assert.equal(blended.blended, true);
   });
 
   it('ignores revisions outside NOTE lines and corrections that are not MET', () => {
-    assert.equal(bpmRevisionFromNotes('• Task revised to 7.5 somehow'), null);
-    assert.equal(bpmRevisionFromNotes('NOTE: Shift start corrected to 8:00 AM based on HR data'), null);
+    assert.equal(metRevisionFromNotes('• Task revised to 7.5 somehow'), null);
+    assert.equal(metRevisionFromNotes('NOTE: Shift start corrected to 8:00 AM based on HR data'), null);
   });
 });
 

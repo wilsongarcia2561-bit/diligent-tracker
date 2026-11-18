@@ -660,7 +660,7 @@ input[type="checkbox"] { accent-color: var(--green); width: 15px; height: 15px; 
 .btn-row { display: flex; flex-wrap: wrap; gap: 10px; }
 
 /* view-level heads (reference, settings) */
-.view-hrr > .card-head h2, .view-reference > .card-head h2, .view-settings > .card-head h2 { font-size: 24px; letter-spacing: -0.02em; }
+.view-reference > .card-head h2, .view-settings > .card-head h2 { font-size: 24px; letter-spacing: -0.02em; }
 
 /* --------------------------------- modal --------------------------------- */
 
