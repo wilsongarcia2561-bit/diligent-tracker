@@ -271,3 +271,175 @@ export function candleChart(host, candles, { height = 260 } = {}) {
     host.append(svg);
   });
 }
+
+/** Smooth path through points that never overshoots them (monotone cubic, Fritsch–Carlson). */
+function monotonePath(pts) {
+  if (pts.length === 1) return `M${pts[0][0]},${pts[0][1]}`;
+  const n = pts.length;
+  const dx = [];
+  const m = [];
+  for (let i = 0; i < n - 1; i += 1) {
+    dx.push(pts[i + 1][0] - pts[i][0]);
+    m.push(dx[i] ? (pts[i + 1][1] - pts[i][1]) / dx[i] : 0);
+  }
+  const t = pts.map((_, i) => (i === 0 ? m[0] : i === n - 1 ? m[n - 2] : m[i - 1] * m[i] <= 0 ? 0 : (m[i - 1] + m[i]) / 2));
+  for (let i = 0; i < n - 1; i += 1) {
+    if (!m[i]) {
+      t[i] = 0;
+      t[i + 1] = 0;
+      continue;
+    }
+    const a = t[i] / m[i];
+    const b = t[i + 1] / m[i];
+    const h = a * a + b * b;
+    if (h > 9) {
+      const s = 3 / Math.sqrt(h);
+      t[i] = s * a * m[i];
+      t[i + 1] = s * b * m[i];
+    }
+  }
+  let d = `M${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}`;
+  for (let i = 0; i < n - 1; i += 1) {
+    const [x0, y0] = pts[i];
+    const [x1, y1] = pts[i + 1];
+    const h = dx[i] / 3;
+    d += `C${(x0 + h).toFixed(1)},${(y0 + t[i] * h).toFixed(1)} ${(x1 - h).toFixed(1)},${(y1 - t[i + 1] * h).toFixed(1)} ${x1.toFixed(1)},${y1.toFixed(1)}`;
+  }
+  return d;
+}
+
+/**
+ * The Trends card's chart: one labeled point per window (or per day), a
+ * smooth line through them over a soft fill, and a selected point the reader
+ * moves by tapping, or with the arrow keys once the chart has focus.
+ * `points`: [{ date, value, tone? ('work' | 'rest') }], oldest first.
+ * `xLabel(point)` names a point under the axis. Returns { select(i) }.
+ */
+export function trendChart(host, points, { selected = points.length - 1, onSelect, xLabel = (p) => shortDate(p.date), height = 210, label = 'TDEE over time' } = {}) {
+  let sel = Math.max(0, Math.min(points.length - 1, selected));
+  let entered = reducedMotion();
+  let api = { select() {} };
+
+  host.tabIndex = 0;
+  host.setAttribute('role', 'group');
+  host.setAttribute('aria-label', `${label}. Use the left and right arrow keys to move between points.`);
+
+  observeWidth(host, (width) => {
+    host.replaceChildren();
+    if (!points.length) {
+      const empty = document.createElement('div');
+      empty.className = 'chart-empty';
+      empty.textContent = 'Nothing logged in this stretch yet';
+      host.append(empty);
+      return;
+    }
+
+    const pad = { top: 30, right: 46, bottom: 30, left: 14 };
+    const plotW = width - pad.left - pad.right;
+    const plotH = height - pad.top - pad.bottom;
+    const base = pad.top + plotH;
+    const values = points.map((p) => p.value);
+    const { lo, hi, step } = niceScale(Math.min(...values), Math.max(...values), 3);
+    let t0 = toTime(points[0].date);
+    let t1 = toTime(points.at(-1).date);
+    if (t0 === t1) {
+      t0 -= DAY_MS;
+      t1 += DAY_MS;
+    }
+    const x = (p) => pad.left + ((toTime(p.date) - t0) / (t1 - t0)) * plotW;
+    const y = (v) => pad.top + (1 - (v - lo) / (hi - lo)) * plotH;
+    const xy = points.map((p) => [x(p), y(p.value)]);
+
+    const svg = el('svg', { width, height, class: `tchart${entered ? '' : ' enter'}`, 'aria-hidden': 'true' });
+    const gid = `tchart-grad-${(gradientSeq += 1)}`;
+    const defs = el('defs');
+    const grad = el('linearGradient', { id: gid, x1: 0, y1: 0, x2: 0, y2: 1 });
+    grad.append(
+      el('stop', { offset: '0%', 'stop-color': 'var(--chart)', 'stop-opacity': 0.2 }),
+      el('stop', { offset: '100%', 'stop-color': 'var(--chart)', 'stop-opacity': 0 }),
+    );
+    defs.append(grad);
+    svg.append(defs);
+
+    for (let v = lo; v <= hi + 1e-9; v += step) {
+      const yy = y(v);
+      svg.append(el('line', { x1: pad.left, x2: width - pad.right + 6, y1: yy, y2: yy, class: 't-grid' }));
+      svg.append(el('text', { x: width - 2, y: yy + 4, 'text-anchor': 'end', class: 't-gl' }, fmt(v)));
+    }
+
+    const line = monotonePath(xy);
+    svg.append(el('path', { d: `${line}L${xy.at(-1)[0].toFixed(1)},${base}L${xy[0][0].toFixed(1)},${base}Z`, fill: `url(#${gid})`, class: 't-area' }));
+    svg.append(el('path', { d: line, class: 't-line', fill: 'none', pathLength: 1 }));
+
+    // Labels thin out when points crowd, but the last and the selected always show.
+    const gap = points.length > 1 ? plotW / (points.length - 1) : plotW;
+    const stride = Math.max(1, Math.ceil(46 / gap));
+    const shows = (i) => (points.length - 1 - i) % stride === 0;
+    const xStride = Math.max(1, Math.ceil(54 / gap));
+
+    const marks = points.map((p, i) => {
+      const [cx, cy] = xy[i];
+      const dot = el('circle', { cx, cy, r: 3.5, class: `t-pt${p.tone ? ` ${p.tone}` : ''}`, style: `--i:${i}` });
+      const val = el('text', { x: cx, y: cy - 12, 'text-anchor': 'middle', class: 't-val', style: `--i:${i}` }, fmt(p.value));
+      svg.append(dot, val);
+      if ((points.length - 1 - i) % xStride === 0) {
+        const anchor = points.length > 1 && i === 0 && cx < 30 ? 'start' : 'middle';
+        svg.append(el('text', { x: cx, y: height - 8, 'text-anchor': anchor, class: 't-x' }, xLabel(p)));
+      }
+      return { dot, val };
+    });
+
+    // The selection: a dashed guide down to the axis and a filled dot with a halo.
+    const selG = el('g', { class: 't-sel' });
+    const guide = el('line', { x1: 0, x2: 0, y1: 0, y2: 0, class: 't-guide' });
+    selG.append(guide, el('circle', { r: 12, class: 't-halo' }), el('circle', { r: 5, class: 't-core' }));
+    svg.append(selG);
+    host.append(svg);
+
+    const place = (i, animate) => {
+      const [cx, cy] = xy[i];
+      selG.style.transition = animate ? '' : 'none';
+      selG.style.transform = `translate(${cx}px, ${cy}px)`;
+      guide.setAttribute('y2', base - cy);
+      marks.forEach((m, k) => {
+        m.val.classList.toggle('sel', k === i);
+        m.val.classList.toggle('hide', k !== i && !shows(k));
+      });
+      if (!animate) requestAnimationFrame(() => { selG.style.transition = ''; });
+    };
+    place(sel, false);
+    entered = true;
+
+    api = {
+      select(i) {
+        sel = Math.max(0, Math.min(points.length - 1, i));
+        place(sel, true);
+      },
+    };
+
+    const pick = (clientX) => {
+      const px = clientX - svg.getBoundingClientRect().left;
+      let best = 0;
+      for (let i = 1; i < xy.length; i += 1) if (Math.abs(xy[i][0] - px) < Math.abs(xy[best][0] - px)) best = i;
+      if (best !== sel) {
+        api.select(best);
+        onSelect?.(best);
+      }
+    };
+    svg.addEventListener('click', (e) => pick(e.clientX));
+    svg.addEventListener('pointermove', (e) => {
+      if (e.pointerType === 'mouse' && e.buttons === 1) pick(e.clientX);
+    });
+  });
+
+  host.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    const next = sel + (e.key === 'ArrowRight' ? 1 : -1);
+    if (next < 0 || next >= points.length) return;
+    api.select(next);
+    onSelect?.(sel);
+  });
+
+  return { select: (i) => api.select(i) };
+}

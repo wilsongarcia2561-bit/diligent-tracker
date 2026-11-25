@@ -154,6 +154,7 @@ const REVEAL_TARGETS = [
   '.card', '.panel', '.stat', '.mini', '.inset',
   '.result-main', '.result-side', '.side-block', '.phase-row', '.strip',
   '.trend-grid > *', '.burns > li', '.ledger', '.chart-legend',
+  '.day-list > li', '.palette-opt',
 ].join(', ');
 
 let revealObserver = null;
@@ -165,7 +166,8 @@ let revealObserver = null;
  */
 export function reveal(root, { skip = '' } = {}) {
   if (!root) return;
-  const targets = [...root.querySelectorAll(REVEAL_TARGETS)].filter((el) => !(skip && el.closest(skip)));
+  // Blocks marked data-no-reveal run their own entrance (page titles, the Trends card).
+  const targets = [...root.querySelectorAll(REVEAL_TARGETS)].filter((el) => !(skip && el.closest(skip)) && !el.closest('[data-no-reveal]'));
   if (reducedMotion() || typeof IntersectionObserver === 'undefined') return;
   // Only one screen is ever on the page: whatever the last call was watching
   // has been replaced, so let go of it rather than holding detached nodes.
@@ -184,6 +186,28 @@ export function reveal(root, { skip = '' } = {}) {
   for (const el of targets) {
     el.classList.add('reveal');
     revealObserver.observe(el);
+  }
+}
+
+/**
+ * Numbers marked data-count="2921" roll up to their value. The markup already
+ * holds the final figure, so without motion (or script) nothing changes.
+ */
+export function countUp(root, { duration = 750 } = {}) {
+  if (!root || reducedMotion()) return;
+  for (const el of root.querySelectorAll('[data-count]')) {
+    const to = Number(el.dataset.count);
+    if (!Number.isFinite(to)) continue;
+    const from = Math.round(to * 0.86);
+    let t0 = null;
+    const step = (now) => {
+      if (!el.isConnected) return;
+      t0 ??= now;
+      const k = Math.min(1, (now - t0) / duration);
+      el.textContent = Math.round(from + (to - from) * (1 - (1 - k) ** 3)).toLocaleString();
+      if (k < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
   }
 }
 

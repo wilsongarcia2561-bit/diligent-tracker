@@ -1,8 +1,11 @@
-/** Settings — framework constants, the bodyweight log (§4), and local data management. */
+/** Settings — palette, framework constants, the bodyweight log (§4), and local data management. */
 
 import { BMR_KCAL, DEFAULT_BREAK_MINUTES, MAX_HR, RESTING_HR } from '../data.js';
 import * as store from '../store.js';
-import { confirmClick, esc, kgToLb, lbToKg, num, openPastePanel, openTextPanel, toast, todayIso } from '../ui.js';
+import { PALETTES, SWATCH_ORDER, applyPalette, paletteId } from '../theme.js';
+import { summarize, addDays } from '../analytics.js';
+import { calculatedDays } from './history.js';
+import { confirmClick, esc, kcal, kgToLb, lbToKg, num, openPastePanel, openTextPanel, toast, todayIso } from '../ui.js';
 
 /**
  * Listeners attach once, here; redraws after an edit only replace markup.
@@ -15,13 +18,63 @@ export function render(root, { onChange }) {
   attach(root, onChange);
 }
 
+/** Last 30 logged days' average, work and rest TDEE: what each palette card previews. */
+function previewFigures() {
+  const all = calculatedDays();
+  if (!all.length) return { avg: 2914, work: 3388, rest: 1946, sample: true };
+  const from = addDays(all.at(-1).date, -29);
+  const s = summarize(all.filter((d) => d.date >= from));
+  return { avg: s.avg, work: s.workAvg, rest: s.restAvg, sample: false };
+}
+
+function paletteSection(current) {
+  const f = previewFigures();
+  const card = (p) => {
+    const c = p.colors;
+    const style = `--p-base:${c.base};--p-card:${c.card};--p-text:${c.text};--p-work:${c.work};--p-rest:${c.rest};--p-line:${c.line}`;
+    return `
+      <button type="button" class="palette-opt" role="radio" aria-checked="${current === p.id}" data-palette-pick="${p.id}" style="${style}">
+        <span class="po-head"><span class="po-name">${esc(p.name)}</span><span class="po-tag">${esc(p.tag)}</span></span>
+        <span class="po-blurb">${esc(p.blurb)}</span>
+        <span class="po-swatches">
+          ${SWATCH_ORDER.map((k) => `<span class="po-sw"><i style="background:${c[k]}"></i><b>${k[0].toUpperCase()}${k.slice(1)}</b><code>${c[k]}</code></span>`).join('')}
+        </span>
+        <span class="po-preview">
+          <span class="po-fig"><small>Avg</small><strong>${kcal(f.avg)}</strong></span>
+          <span class="po-fig work"><small>Work</small><strong>${kcal(f.work)}</strong></span>
+          <span class="po-fig rest"><small>Rest</small><strong>${kcal(f.rest)}</strong></span>
+        </span>
+      </button>`;
+  };
+  return `
+    <section class="card palette-card" data-no-reveal>
+      <div class="card-head">
+        <h3>Palette</h3>
+        <span class="meta">Work and rest get one color each, used for nothing else.</span>
+      </div>
+      <div class="palette-auto">
+        <button type="button" class="chip-btn" role="radio" aria-checked="${current === 'auto'}" data-palette-pick="auto">Match device</button>
+        <span class="muted small">Field in light mode, Clay &amp; Slate in dark.${f.sample ? '' : ' Previews show your last 30 logged days.'}</span>
+      </div>
+      <div class="palette-grid" role="radiogroup" aria-label="Palette">
+        ${PALETTES.map(card).join('')}
+      </div>
+    </section>`;
+}
+
 function draw(root) {
   const s = store.getSettings();
   const weights = store.listWeights().slice().reverse();
   const hrDates = store.heartRateDates();
 
   root.innerHTML = `
-    <div class="card-head"><h2>Settings</h2></div>
+    <header class="page-head" data-no-reveal>
+      <p class="page-kicker">TDEE.</p>
+      <h1 class="page-title">Settings.</h1>
+      <p class="page-sub">Palette, bodyweight, constants and your data.</p>
+    </header>
+
+    ${paletteSection(paletteId(s.palette))}
 
     <section class="card">
       <h3>Bodyweight log <span class="sec-ref">§4</span></h3>
@@ -140,6 +193,16 @@ function attach(root, onChange) {
 
   root.addEventListener('click', (e) => {
     const action = e.target.dataset.action;
+
+    const pick = e.target.closest('[data-palette-pick]');
+    if (pick) {
+      const id = paletteId(pick.dataset.palettePick);
+      store.updateSettings({ palette: id });
+      applyPalette(id, { animate: true });
+      root.querySelectorAll('[data-palette-pick]').forEach((b) => b.setAttribute('aria-checked', String(paletteId(b.dataset.palettePick) === id)));
+      onChange?.();
+      return;
+    }
 
     if (e.target.id === 'w-add') {
       const date = root.querySelector('#w-date').value;

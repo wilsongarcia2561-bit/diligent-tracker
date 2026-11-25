@@ -173,3 +173,81 @@ export function groupByWeek(days) {
     };
   });
 }
+
+/* ------------------------------ trailing windows ------------------------------ */
+
+/**
+ * Mean TDEE over the `span` calendar days ending on `end` (inclusive), with
+ * its work/rest split — "Weekly" is span 7 and "Monthly" span 30.
+ */
+export function trailingWindow(days, end, span) {
+  const from = addDays(end, -(span - 1));
+  const inside = days.filter((d) => d.date >= from && d.date <= end);
+  return {
+    date: end,
+    from,
+    span,
+    value: mean(inside, (d) => d.tdee),
+    count: inside.length,
+    work: inside.filter((d) => !d.restDay).length,
+    rest: inside.filter((d) => d.restDay).length,
+  };
+}
+
+/**
+ * `count` back-to-back windows of `span` days, the last one ending at
+ * `anchor`. Windows with no logged day are left out. Oldest first.
+ */
+export function trailingSeries(days, anchor, span, count) {
+  const out = [];
+  for (let k = count - 1; k >= 0; k -= 1) {
+    const w = trailingWindow(days, addDays(anchor, -span * k), span);
+    if (w.count) out.push(w);
+  }
+  return out;
+}
+
+/* ---------------------------------- biweeks ---------------------------------- */
+
+/** Biweeks start on alternate Mondays, lined up so Nov 2 and Nov 16, 2026 each open one. */
+const BIWEEK_ANCHOR = '2026-11-02';
+
+export function biweekStart(iso) {
+  const diff = Math.round((toTime(iso) - toTime(BIWEEK_ANCHOR)) / DAY_MS);
+  return addDays(BIWEEK_ANCHOR, Math.floor(diff / 14) * 14);
+}
+
+/**
+ * One two-week period. `days` may include unusable days: they are listed but
+ * never counted. `logged` counts usable days; `shown` is the last date that
+ * has happened yet (the end, or today in the current biweek).
+ */
+export function summarizeBiweek(days, start, today) {
+  const end = addDays(start, 13);
+  const inside = sortByDate(days.filter((d) => d.date >= start && d.date <= end));
+  const usable = inside.filter((d) => !d.unusable);
+  const work = usable.filter((d) => !d.restDay);
+  const rest = usable.filter((d) => d.restDay);
+  return {
+    start,
+    end,
+    shown: end < today ? end : today,
+    days: inside,
+    avg: mean(usable, (d) => d.tdee),
+    logged: usable.length,
+    unusableCount: inside.length - usable.length,
+    workCount: work.length,
+    workAvg: mean(work, (d) => d.tdee),
+    restCount: rest.length,
+    restAvg: mean(rest, (d) => d.tdee),
+  };
+}
+
+/** Every biweek from the one holding `today` back to the one holding the first logged day. Newest first. */
+export function biweeks(days, today) {
+  const newest = biweekStart(today);
+  const first = days.length ? biweekStart(sortByDate(days)[0].date) : newest;
+  const out = [];
+  for (let s = newest; s >= first; s = addDays(s, -14)) out.push(summarizeBiweek(days, s, today));
+  return out;
+}

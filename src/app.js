@@ -7,6 +7,7 @@ import * as trendsView from './views/trends.js';
 import * as referenceView from './views/reference.js';
 import * as settingsView from './views/settings.js';
 import * as sync from './sync.js';
+import { applyPalette } from './theme.js';
 import { reveal, toast, todayIso } from './ui.js';
 
 const TABS = [
@@ -108,8 +109,8 @@ function renderHeaderActions() {
   if (current === 'log') {
     host.innerHTML = `${syncPillHtml()}<span id="save-state" class="save-pill" data-state="saved" role="status">● Saved</span>`;
   } else if (current === 'history') {
-    const empty = !store.listEntries().length;
-    host.innerHTML = `${syncPillHtml()}<button type="button" class="btn ghost" data-header="export-csv" ${empty ? 'disabled' : ''}>Export CSV</button>`;
+    // CSV export sits in the History page head now.
+    host.innerHTML = syncPillHtml();
   } else {
     host.innerHTML = `${syncPillHtml()}<span class="mono-date">${todayLabel()}</span>
       <button type="button" class="btn primary" data-header="log-today">+ Log day</button>`;
@@ -118,6 +119,7 @@ function renderHeaderActions() {
 
 /** Another device changed something: refresh whatever is on screen without disturbing typing. */
 function onRemoteChange(keys) {
+  if (keys.includes('s')) applyPalette(store.getSettings().palette, { animate: true });
   if (current === 'log') {
     logView.onRemoteChange(keys);
   } else {
@@ -135,6 +137,8 @@ function openDay(date) {
 
 function mount() {
   const root = document.getElementById('view');
+  // Floating pieces a screen hangs on <body> (History's Archive island) leave with it.
+  document.querySelectorAll('[data-view-owned]').forEach((n) => n.remove());
   // A fresh node per render keeps delegated listeners from stacking up.
   const fresh = document.createElement('main');
   fresh.id = 'view';
@@ -213,6 +217,7 @@ function renderNav() {
 
 function init() {
   store.load();
+  applyPalette(store.getSettings().palette);
   const importedDate = importFromQuery();
   logView.loadDate(importedDate || todayIso());
   renderNav();

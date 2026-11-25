@@ -3,6 +3,11 @@ import { describe, it } from 'node:test';
 
 import {
   addDays,
+  biweekStart,
+  biweeks,
+  summarizeBiweek,
+  trailingSeries,
+  trailingWindow,
   groupByWeek,
   mainTask,
   rangeWindows,
@@ -155,5 +160,62 @@ describe('groupByWeek', () => {
     assert.deepEqual(groups[1].rows.map((r) => r.date), ['2026-09-12', '2026-09-07']);
     assert.equal(groups[1].workCount, 1);
     assert.equal(groups[1].restCount, 1);
+  });
+});
+
+describe('trailing windows', () => {
+  const days = [
+    day('2026-11-10', 2000, { restDay: true }),
+    day('2026-11-17', 3000),
+    day('2026-11-20', 3200),
+    day('2026-11-23', 2800, { restDay: true }),
+  ];
+
+  it('averages the span of calendar days ending on a date, both ends included', () => {
+    const w = trailingWindow(days, '2026-11-23', 7);
+    assert.equal(w.from, '2026-11-17');
+    assert.equal(w.count, 3);
+    assert.equal(w.value, 3000);
+    assert.deepEqual([w.work, w.rest], [2, 1]);
+  });
+
+  it('steps back a whole span per point and leaves out empty windows', () => {
+    const s = trailingSeries(days, '2026-11-23', 7, 4);
+    assert.deepEqual(s.map((w) => w.date), ['2026-11-16', '2026-11-23']);
+    assert.equal(s[0].value, 2000);
+  });
+});
+
+describe('biweeks', () => {
+  it('start on alternate Mondays lined up with Nov 2 and Nov 16, 2026', () => {
+    assert.equal(biweekStart('2026-11-02'), '2026-11-02');
+    assert.equal(biweekStart('2026-11-15'), '2026-11-02');
+    assert.equal(biweekStart('2026-11-16'), '2026-11-16');
+    assert.equal(biweekStart('2026-11-29'), '2026-11-16');
+    assert.equal(biweekStart('2026-10-31'), '2026-10-19');
+    assert.equal(biweekStart('2027-01-11'), '2027-01-11');
+  });
+
+  it('counts usable days only, splits work and rest, and stops at today', () => {
+    const list = [
+      day('2026-11-16', 3000),
+      day('2026-11-17', 3100),
+      day('2026-11-18', 1900, { restDay: true }),
+      day('2026-11-19', 0, { unusable: true }),
+    ];
+    const b = summarizeBiweek(list, '2026-11-16', '2026-11-25');
+    assert.equal(b.end, '2026-11-29');
+    assert.equal(b.shown, '2026-11-25');
+    assert.equal(b.logged, 3);
+    assert.equal(b.unusableCount, 1);
+    assert.equal(b.avg, (3000 + 3100 + 1900) / 3);
+    assert.deepEqual([b.workCount, b.workAvg, b.restCount, b.restAvg], [2, 3050, 1, 1900]);
+  });
+
+  it('lists every biweek back to the first logged day, newest first, empty ones included', () => {
+    const list = biweeks([day('2026-10-20', 3000), day('2026-11-24', 3100)], '2026-11-25');
+    assert.deepEqual(list.map((b) => b.start), ['2026-11-16', '2026-11-02', '2026-10-19']);
+    assert.equal(list[1].logged, 0);
+    assert.equal(list[1].avg, null);
   });
 });
