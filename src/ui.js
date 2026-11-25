@@ -154,7 +154,7 @@ const REVEAL_TARGETS = [
   '.card', '.panel', '.stat', '.mini', '.inset',
   '.result-main', '.result-side', '.side-block', '.phase-row', '.strip',
   '.trend-grid > *', '.burns > li', '.ledger', '.chart-legend',
-  '.day-list > li', '.palette-opt',
+  '.day-list > li', '.palette-opt', '.archive-list > li', '.phase', '.import-guide',
 ].join(', ');
 
 let revealObserver = null;

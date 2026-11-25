@@ -4,7 +4,7 @@ import { addDays, biweeks, mainTask, trailingAverage } from '../analytics.js';
 import { calculateDay } from '../engine.js';
 import { EXPORT_COLUMNS } from '../summaryImport.js';
 import * as store from '../store.js';
-import { countUp, esc, kcal, num, openTextPanel, reveal, todayIso } from '../ui.js';
+import { countUp, esc, kcal, num, openTextPanel, reducedMotion, reveal, todayIso } from '../ui.js';
 
 const resolveWeight = (entry) => store.resolveEntry(entry);
 
@@ -106,13 +106,46 @@ function biweekTag(i) {
   return i === 0 ? 'This biweek' : i === 1 ? 'Last biweek' : `${i} biweeks ago`;
 }
 
+/**
+ * The biweek's work (or rest) days as dots on stems across its 14 days, with
+ * the all-time average for that kind of day dashed across, so the period
+ * reads against the whole history. Plain SVG markup.
+ */
+function periodChart(b, list, allTimeAvg, tone) {
+  const W = 132;
+  const H = 64;
+  const pad = { l: 4, r: 4, t: 8, b: 10 };
+  const base = H - pad.b;
+  const values = list.map((d) => d.tdee);
+  if (!values.length) return `<svg class="pchart" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" aria-hidden="true"><line class="pc-base" x1="${pad.l}" x2="${W - pad.r}" y1="${base}" y2="${base}"/></svg>`;
+  const ref = allTimeAvg ?? values[0];
+  const lo = Math.min(...values, ref) - 150;
+  const hi = Math.max(...values, ref) + 100;
+  const x = (iso) => pad.l + (Math.round((Date.parse(iso) - Date.parse(b.start)) / 86400000) / 13) * (W - pad.l - pad.r);
+  const y = (v) => pad.t + (1 - (v - lo) / (hi - lo)) * (base - pad.t);
+  const marks = list.map((d, i) => {
+    const cx = x(d.date).toFixed(1);
+    const cy = y(d.tdee).toFixed(1);
+    return `<line class="pc-stem" x1="${cx}" x2="${cx}" y1="${base}" y2="${cy}" style="--i:${i}"/><circle class="pc-dot ${tone}" cx="${cx}" cy="${cy}" r="3" style="--i:${i}"><title>${d.date}: ${kcal(d.tdee)} kcal</title></circle>`;
+  }).join('');
+  const avgLine = allTimeAvg === null ? '' : `<line class="pc-avg" x1="${pad.l}" x2="${W - pad.r}" y1="${y(allTimeAvg).toFixed(1)}" y2="${y(allTimeAvg).toFixed(1)}"/>`;
+  return `<svg class="pchart" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${list.length} ${tone} day${list.length === 1 ? '' : 's'} this biweek against the all-time ${tone}-day average">
+    <line class="pc-base" x1="${pad.l}" x2="${W - pad.r}" y1="${base}" y2="${base}"/>${avgLine}${marks}</svg>`;
+}
+
+/** "▲ 120 vs all-time 2,865" under a work or rest figure. */
+function vsAllTime(value, allTime) {
+  if (value === null || allTime === null) return 'no all-time figure yet';
+  const d = Math.round(value - allTime);
+  return `${d >= 0 ? '▲' : '▼'} ${Math.abs(d).toLocaleString()} vs all-time ${kcal(allTime)}`;
+}
+
 let selected = 0;
 
 export function render(root, { onEdit }) {
   const entries = new Map(store.listEntries().map((e) => [e.date, e]));
   const days = calculatedDays({ includeUnusable: true });
   const usableDays = days.filter((d) => !d.unusable);
-  document.querySelectorAll('[data-view-owned]').forEach((n) => n.remove());
 
   const head = (sub) => `
     <header class="page-head" data-no-reveal>
@@ -141,6 +174,9 @@ export function render(root, { onEdit }) {
   const periods = biweeks(days, today);
   selected = Math.min(selected, periods.length - 1);
   const byDate = new Map(days.map((d) => [d.date, d]));
+  const meanOf = (list) => (list.length ? list.reduce((t, d) => t + d.tdee, 0) / list.length : null);
+  const allWork = meanOf(usableDays.filter((d) => !d.restDay));
+  const allRest = meanOf(usableDays.filter((d) => d.restDay));
 
   root.innerHTML = `${head('Two weeks at a time. Tap a day for detail.')}
     <div class="biweek-switch" role="tablist" aria-label="Two-week period" data-no-reveal>
@@ -228,6 +264,7 @@ export function render(root, { onEdit }) {
     const list = [];
     for (let date = b.shown; date >= b.start; date = addDays(date, -1)) list.push(row(date));
     const big = (v) => (v === null ? '–' : `<span data-count="${Math.round(v)}">${kcal(v)}</span>`);
+    const usable = b.days.filter((d) => !d.unusable);
     body.innerHTML = `
       <section class="bw-summary">
         <p class="kicker">Avg TDEE</p>
@@ -236,11 +273,29 @@ export function render(root, { onEdit }) {
           <span class="bw-logged">${b.logged} of 14 days logged${b.unusableCount ? ` · ${b.unusableCount} unusable` : ''}</span>
         </div>
         <div class="wr-cards">
-          <div class="wr work"><p class="kicker">Work · ${b.workCount}D</p><span class="wr-num">${big(b.workAvg)}</span></div>
-          <div class="wr rest"><p class="kicker">Rest · ${b.restCount}D</p><span class="wr-num">${big(b.restAvg)}</span></div>
+          <div class="wr work">
+            <div class="wr-text"><p class="kicker">Work · ${b.workCount}D</p><span class="wr-num">${big(b.workAvg)}</span><span class="wr-sub">${vsAllTime(b.workAvg, allWork)}</span></div>
+            ${periodChart(b, usable.filter((d) => !d.restDay), allWork, 'work')}
+          </div>
+          <div class="wr rest">
+            <div class="wr-text"><p class="kicker">Rest · ${b.restCount}D</p><span class="wr-num">${big(b.restAvg)}</span><span class="wr-sub">${vsAllTime(b.restAvg, allRest)}</span></div>
+            ${periodChart(b, usable.filter((d) => d.restDay), allRest, 'rest')}
+          </div>
         </div>
       </section>
       <ol class="day-list">${list.join('') || '<li class="day-none">This biweek hasn’t started yet.</li>'}</ol>
+      ${periods.length > 1 ? `
+      <section class="archive" aria-labelledby="archive-title">
+        <div class="archive-head"><h2 id="archive-title">Archive</h2><span class="meta">${periods.length} biweeks</span></div>
+        <ol class="archive-list">
+          ${periods.map((p, i) => `
+            <li><button type="button" class="archive-row${i === selected ? ' on' : ''}" data-pick="${i}" ${i === selected ? 'aria-current="true"' : ''}>
+              <span class="ar-main"><span class="ar-range">${rangeLabel(p.start, p.end)}</span><span class="ar-tag">${biweekTag(i)}</span></span>
+              <span class="ar-meta">${p.logged} day${p.logged === 1 ? '' : 's'}</span>
+              <span class="ar-avg">${p.avg === null ? '–' : kcal(p.avg)}</span>
+            </button></li>`).join('')}
+        </ol>
+      </section>` : ''}
       <p class="footnote">Est. lines are post-work NEAT plus background daily life, the two lowest-confidence components. vs 7D compares a day with the 7 calendar days before it. <strong>Unusable</strong> days are listed but left out of every average and of Trends.</p>`;
     countUp(body);
     if (animate) reveal(body);
@@ -256,28 +311,21 @@ export function render(root, { onEdit }) {
     void body.offsetWidth;
     body.classList.add(forward ? 'slide-l' : 'slide-r');
     drawBody(true);
-    island?.querySelector('.island-count')?.replaceChildren(rangeLabel(periods[selected].start, periods[selected].end));
   };
 
   drawSwitch();
   drawBody(false);
   requestAnimationFrame(() => moveThumb(false));
 
-  // Older biweeks live behind the Archive island, bottom-center.
-  let island = null;
-  if (periods.length > 2) {
-    island = document.createElement('button');
-    island.type = 'button';
-    island.className = 'archive-island';
-    island.dataset.viewOwned = '';
-    island.innerHTML = `<span class="island-label">Archive</span><span class="island-count">${rangeLabel(periods[selected].start, periods[selected].end)}</span>`;
-    document.body.append(island);
-    island.addEventListener('click', () => openArchive(periods, selected, choose));
-  }
-
   root.addEventListener('click', (e) => {
     if (e.target.closest('[data-action="csv"]')) {
       exportCsv();
+      return;
+    }
+    const pick = e.target.closest('[data-pick]');
+    if (pick) {
+      choose(Number(pick.dataset.pick));
+      sw.scrollIntoView({ behavior: reducedMotion() ? 'auto' : 'smooth', block: 'start' });
       return;
     }
     const tab = e.target.closest('[data-bw]');
@@ -302,44 +350,4 @@ export function render(root, { onEdit }) {
       toggle.setAttribute('aria-expanded', String(on));
     }
   });
-}
-
-/** The archive sheet: every biweek with its average, newest first. */
-function openArchive(periods, selected, choose) {
-  const backdrop = document.createElement('div');
-  backdrop.className = 'sheet-backdrop';
-  backdrop.dataset.viewOwned = '';
-  backdrop.innerHTML = `
-    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="archive-title">
-      <div class="sheet-grip" aria-hidden="true"></div>
-      <div class="sheet-head"><h2 id="archive-title">Archive</h2><button type="button" class="icon-btn" data-close aria-label="Close">✕</button></div>
-      <ol class="archive-list">
-        ${periods.map((b, i) => `
-          <li><button type="button" class="archive-row${i === selected ? ' on' : ''}" data-pick="${i}">
-            <span class="ar-main"><span class="ar-range">${rangeLabel(b.start, b.end)}</span><span class="ar-tag">${biweekTag(i)}</span></span>
-            <span class="ar-meta">${b.logged} day${b.logged === 1 ? '' : 's'}</span>
-            <span class="ar-avg">${b.avg === null ? '–' : kcal(b.avg)}</span>
-          </button></li>`).join('')}
-      </ol>
-    </div>`;
-  const close = () => {
-    backdrop.classList.add('leaving');
-    document.removeEventListener('keydown', onKey);
-    setTimeout(() => backdrop.remove(), 220);
-  };
-  const onKey = (e) => {
-    if (e.key === 'Escape') close();
-  };
-  document.addEventListener('keydown', onKey);
-  backdrop.addEventListener('click', (e) => {
-    const pick = e.target.closest('[data-pick]');
-    if (pick) {
-      choose(Number(pick.dataset.pick));
-      close();
-    } else if (e.target === backdrop || e.target.closest('[data-close]')) {
-      close();
-    }
-  });
-  document.body.append(backdrop);
-  backdrop.querySelector(`[data-pick="${selected}"]`)?.focus();
 }

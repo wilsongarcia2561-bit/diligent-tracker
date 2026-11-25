@@ -15,9 +15,6 @@ import {
   TASK_METS,
 } from '../data.js';
 import {
-  MODEL,
-  MODEL_FORMULAS,
-  MODEL_LABELS,
   durationMinutes,
   formatDuration,
   calculateDay,
@@ -29,7 +26,7 @@ import { htmlToText, looksLikeDayLog, parseCalendarLog, parseMultiDayLog, splitD
 import { classifyTask, daySoil, isShadeDay } from '../metGlossary.js';
 import { looksLikeSummaryTable, parseSummaryTable } from '../summaryImport.js';
 import * as store from '../store.js';
-import { confirmClick, esc, kcal, num, openPastePanel, openTextPanel, pct, toast, todayIso } from '../ui.js';
+import { confirmClick, countUp, esc, kcal, num, openPastePanel, openTextPanel, pct, reducedMotion, toast, todayIso } from '../ui.js';
 import { readXlsx, rowsToCsv, rowsToText } from '../xlsx.js';
 import { calculatedDays } from './history.js';
 
@@ -38,6 +35,8 @@ let dirty = false;
 /** Trailing 7-day average for the open date. Other days don't change while
  * this one is edited, so it's computed once per load, not per keystroke. */
 let trailing = null;
+/** The results panel builds itself in (bar, numbers, rows) once each time a day opens, not on every keystroke. */
+let playIntro = false;
 
 function setSaveState(state) {
   const badge = document.getElementById('save-state');
@@ -82,6 +81,7 @@ export function loadDate(date) {
   if (!draft.phases || draft.phases.length === 0) draft.phases = [store.newPhase()];
   dirty = false;
   trailing = trailingAverage(calculatedDays(), date);
+  playIntro = true;
 }
 
 /**
@@ -259,7 +259,6 @@ function stripHtml(entry, calc) {
 }
 
 function formTemplate(entry, calc) {
-  const weightInEffect = store.weightForDate(entry.date);
   const shiftGross = durationMinutes(entry.shiftStart, entry.shiftEnd);
 
   return `
@@ -273,8 +272,6 @@ function formTemplate(entry, calc) {
         <span class="field-label">Date</span>
         <input type="date" id="entry-date" value="${esc(entry.date)}">
       </label>
-      <label class="check"><input type="checkbox" id="f-restDay" data-field="restDay" ${entry.restDay ? 'checked' : ''}> Non-work day</label>
-      <label class="check" title="Leave this day out of Trends and every average"><input type="checkbox" id="f-unusable" data-field="unusable" ${entry.unusable ? 'checked' : ''}> Unusable</label>
       <label class="btn ghost" for="import-file-input">Import from file</label>
       <input type="file" id="import-file-input" class="pick-input">
       <button type="button" class="btn ghost" data-action="import-paste">Paste text</button>
@@ -348,11 +345,10 @@ Shift: 7:56 AM - 11:51 AM
 
   <section class="card">
     <h2>Conditions &amp; sites <span class="sec-ref">§3 · §11</span></h2>
-    <div class="grid grid-4">
+    <div class="grid grid-3">
       ${field('Temp °F', input('tempF', entry.tempF, 'type="number" step="1" placeholder="raw"'))}
       ${field('Feels-like °F', input('feelsLikeF', entry.feelsLikeF, 'type="number" step="1" placeholder="heat index"'), '≥ 88°F confirms upper-range MET')}
       ${field('Site count', input('siteCount', entry.siteCount, 'type="number" min="1" step="1" placeholder="auto"'))}
-      ${field('Bodyweight kg (fasted AM)', input('weightKg', entry.weightKg, 'type="number" step="0.1" min="0" placeholder="' + num(weightInEffect, 1) + '"'), `Using ${num(calc.weightKg, 1)} kg`)}
     </div>
     <div class="check-row">
       <label class="check"><input type="checkbox" id="f-heatInferred" data-field="heatInferred" ${entry.heatInferred ? 'checked' : ''}> Heat ≥88°F inferred (not documented) — flags the day</label>
@@ -412,6 +408,40 @@ Shift: 7:56 AM - 11:51 AM
 
 /* -------------------------------- results -------------------------------- */
 
+/**
+ * Intake, balance and the last 7 days in one squared panel: the day's TDEE,
+ * its intake and the trailing 7-day average on one scale, then the three
+ * figures that compare them.
+ */
+function energyModule(calc, vs, signed) {
+  const intake = calc.intakeKcal ? Number(calc.intakeKcal) : null;
+  const scale = Math.max(calc.tdee || 0, intake || 0, trailing || 0) || 1;
+  const w = (v) => `${((v / scale) * 100).toFixed(1)}%`;
+  const bar = (key, labelText, value, note) => `
+    <div class="eg-row eg-${key}">
+      <span class="eg-label">${labelText}</span>
+      <span class="eg-track">${value === null ? `<span class="eg-none">${note}</span>` : `<span class="eg-bar" style="width:${w(value)}"></span>`}</span>
+      <span class="eg-val">${value === null ? '—' : kcal(value)}</span>
+    </div>`;
+  const balance = calc.balance;
+  const balanceCell = balance === null
+    ? '<div class="eg-stat"><span class="eg-k">Balance</span><span class="eg-v faint">—</span><span class="eg-s">log intake to see it</span></div>'
+    : `<div class="eg-stat"><span class="eg-k">${balance < 0 ? 'Deficit' : 'Surplus'}</span><span class="eg-v">${kcal(Math.abs(balance))}</span><span class="eg-s">${calc.tdee ? `${Math.abs((balance / calc.tdee) * 100).toFixed(0)}% of TDEE` : ''}</span></div>`;
+  return `
+    <section class="energy" aria-label="Intake, balance and the last 7 days">
+      <div class="eg-bars">
+        ${bar('tdee', 'TDEE', calc.tdee, '')}
+        ${bar('intake', 'Intake', intake, 'not logged')}
+        ${bar('avg', '7-day avg', trailing, 'no days in the prior week')}
+      </div>
+      <div class="eg-stats">
+        <div class="eg-stat"><span class="eg-k">Intake</span><span class="eg-v${intake ? '' : ' faint'}">${intake ? kcal(intake) : '—'}</span><span class="eg-s">${intake ? 'kcal logged' : 'not logged'}</span></div>
+        ${balanceCell}
+        <div class="eg-stat"><span class="eg-k">vs 7-day avg</span><span class="eg-v">${vs === null ? '—' : `${vs >= 0 ? '▲' : '▼'} ${signed(vs).replace(/^[+−]/, '')}`}</span><span class="eg-s">${vs === null ? 'no days in the prior week' : `${vs >= 0 ? 'above' : 'below'} ${kcal(trailing)}`}</span></div>
+      </div>
+    </section>`;
+}
+
 function resultsTemplate(calc) {
   const soilName = (code) => SOIL_CLASSES.find((s) => s.code === code)?.name || '';
   const [y, m, d] = calc.date.split('-').map(Number);
@@ -424,10 +454,7 @@ function resultsTemplate(calc) {
   const hm = (min) => `${Math.floor(Math.round(min) / 60)}h ${String(Math.round(min) % 60).padStart(2, '0')}m`;
   const clock = (t) => (t ? t.replace(/^0/, '') : '');
 
-  const balance = calc.balance;
-  const balanceCard = balance === null
-    ? `<div class="mini"><span class="mini-label">Balance</span><span class="mini-val faint">—</span><span class="mini-sub">log intake to see it</span></div>`
-    : `<div class="mini ${balance < 0 ? 'tone-down' : 'tone-up'}"><span class="mini-label">${balance < 0 ? 'Deficit' : 'Surplus'}</span><span class="mini-val">${kcal(Math.abs(balance))}</span></div>`;
+  const energy = energyModule(calc, vs, signed);
 
   const NON_WORK_LABELS = { active: 'Walking', neat: 'General NEAT' };
   const label = (c) => (calc.restDay && NON_WORK_LABELS[c.key]) || c.label;
@@ -437,7 +464,7 @@ function resultsTemplate(calc) {
   const workedMin = worked.reduce((sum, p) => sum + p.netMinutes, 0);
   const blended = workedMin ? worked.reduce((sum, p) => sum + p.met * p.netMinutes, 0) / workedMin : null;
   const phaseRows = calc.phases.map((p, i) => `
-    <li class="phase-row">
+    <li class="phase-row" style="--k:${i}">
       <div class="phase-row-head">
         <span class="idx">${String(i + 1).padStart(2, '0')}</span>
         <span class="phase-name">${esc(p.description || 'Untitled phase')}</span>
@@ -451,30 +478,21 @@ function resultsTemplate(calc) {
       </div>
     </li>`).join('');
 
-  const flags = calc.flags.length
-    ? calc.flags.map((f) => `<li class="flag ${f.level}"><span class="flag-dot"></span><span>${esc(f.text)}</span></li>`).join('')
-    : '<li class="flag ok"><span class="flag-dot"></span><span>No data-quality flags for this day.</span></li>';
-  const warnCount = calc.flags.filter((f) => f.level !== 'info').length;
-
   return `
   <div class="result-grid">
     <div class="result-main">
       <p class="eyebrow">${when} · Estimated TDEE${calc.unusable ? ' · <span class="pill unusable">Unusable — left out of Trends</span>' : ''}</p>
-      <div class="hero-num xl">${kcal(calc.tdee)}<span class="unit">kcal</span></div>
+      <div class="hero-num xl"><span data-count="${Math.round(calc.tdee)}">${kcal(calc.tdee)}</span><span class="unit">kcal</span></div>
       <p class="hero-note">±${DAY_UNCERTAINTY_KCAL.min}–${DAY_UNCERTAINTY_KCAL.max} kcal single-day precision</p>
 
-      <div class="mini-cards">
-        <div class="mini"><span class="mini-label">Intake</span><span class="mini-val${calc.intakeKcal ? '' : ' faint'}">${calc.intakeKcal ? kcal(calc.intakeKcal) : '—'}</span>${calc.intakeKcal ? '' : '<span class="mini-sub">not logged</span>'}</div>
-        ${balanceCard}
-        <div class="mini"><span class="mini-label">vs 7D avg</span><span class="mini-val ${vs === null ? 'faint' : vs >= 0 ? 'up' : 'down'}">${vs === null ? '—' : signed(vs)}</span>${vs === null ? '<span class="mini-sub">no days in the prior week</span>' : ''}</div>
-      </div>
+      ${energy}
 
       <div class="stack-zone">
         <div class="stackbar tall" role="group" aria-label="Today's TDEE split by component — focus a segment for its detail">
-          ${COMPONENTS.map((c) => `<span class="${c.estimate ? 'est' : ''}" data-comp="${c.key}" tabindex="0" role="button" aria-label="${label(c)}: ${kcal(calc.components[c.key])} kcal" style="flex:${Math.max(0.001, calc.components[c.key] || 0)};--sw:${c.color}"></span>`).join('')}
+          ${COMPONENTS.map((c, k) => `<span class="${c.estimate ? 'est' : ''}" data-comp="${c.key}" tabindex="0" role="button" aria-label="${label(c)}: ${kcal(calc.components[c.key])} kcal" style="flex:${Math.max(0.001, calc.components[c.key] || 0)};--sw:${c.color};--k:${k}"></span>`).join('')}
         </div>
         <ul class="legend-grid">
-          ${COMPONENTS.map((c) => `<li data-comp="${c.key}"><span class="swatch" style="--sw:${c.color}"></span><span>${label(c)}${c.estimate ? ' <span class="est-tag">EST</span>' : ''}</span><strong>${kcal(calc.components[c.key])}</strong></li>`).join('')}
+          ${COMPONENTS.map((c, k) => `<li data-comp="${c.key}" style="--k:${k}"><span class="swatch" style="--sw:${c.color}"></span><span>${label(c)}${c.estimate ? ' <span class="est-tag">EST</span>' : ''}</span><strong>${kcal(calc.components[c.key])}</strong></li>`).join('')}
         </ul>
         <div class="comp-readout" aria-live="polite"><p class="hint">Hover, tap or hold a segment to see its kcal, hours and MET.</p></div>
       </div>
@@ -498,24 +516,8 @@ function resultsTemplate(calc) {
           ? `<ol class="phase-list">${phaseRows}</ol>`
           : '<p class="side-empty">No task phases yet. Describe the work below and a MET is suggested automatically.</p>'}
 
-      ${calc.phases.length ? `
-      <details class="side-block" data-key="model">
-        <summary>Model comparison <span class="meta">§12.11</span></summary>
-        <table class="mini-table">
-          <tbody>
-            <tr class="raw-row"><td>${MODEL_LABELS[MODEL.RAW]}<span class="sub">${MODEL_FORMULAS[MODEL.RAW]} · QA only, never added to BMR</span></td><td class="num">${kcal(calc.comparison[MODEL.RAW])}</td></tr>
-            <tr class="used-row"><td>${MODEL_LABELS[MODEL.INTERMEDIATE]}<span class="sub">${MODEL_FORMULAS[MODEL.INTERMEDIATE]} · the only active model, applied to TDEE</span></td><td class="num strong">${kcal(calc.comparison[MODEL.INTERMEDIATE])}</td></tr>
-            <tr class="raw-row"><td>${MODEL_LABELS[MODEL.KRI]}<span class="sub">${MODEL_FORMULAS[MODEL.KRI]} · retired Sept 3 — restatement impact +${kcal(calc.comparison[MODEL.KRI] - calc.comparison[MODEL.INTERMEDIATE])}</span></td><td class="num">${kcal(calc.comparison[MODEL.KRI])}</td></tr>
-          </tbody>
-        </table>
-      </details>` : ''}
-
       ${heartRateBlock(calc)}
 
-      <details class="side-block" data-key="quality" ${warnCount ? 'open' : ''}>
-        <summary>Data quality <span class="meta">${warnCount ? `${warnCount} warning${warnCount === 1 ? '' : 's'}` : `${calc.flags.length} note${calc.flags.length === 1 ? '' : 's'}`}</span></summary>
-        <ul class="flags">${flags}</ul>
-      </details>
     </div>
   </div>`;
 }
@@ -712,6 +714,20 @@ export function refreshResults() {
   const calc = calculateDay(withResolvedWeight(draft), store.getSettings());
   const open = new Map([...host.querySelectorAll('details[data-key]')].map((d) => [d.dataset.key, d.open]));
   host.innerHTML = resultsTemplate(calc);
+  if (playIntro) {
+    playIntro = false;
+    if (!reducedMotion()) {
+      host.classList.remove('intro');
+      void host.offsetWidth;
+      host.classList.add('intro');
+      countUp(host, { duration: 1100 });
+      clearTimeout(host._introTimer);
+      host._introTimer = setTimeout(() => host.classList.remove('intro'), 3600);
+    }
+  } else {
+    // A recalculation mid-intro (typing, a sync) shows the finished panel.
+    host.classList.remove('intro');
+  }
   readoutCalc = calc;
   shownComp = null;
   // Keep the reader's expanded/collapsed choice across live recalculation —
@@ -740,7 +756,7 @@ function withResolvedWeight(entry) {
 export function render(root) {
   if (!draft) loadDate(todayIso());
   root.innerHTML = `
-    <section id="results" class="entry-result" aria-live="polite"></section>
+    <section id="results" class="entry-result" aria-live="polite" data-no-reveal></section>
     <form id="entry-form" class="entry-form" autocomplete="off"></form>`;
 
   const form = root.querySelector('#entry-form');
