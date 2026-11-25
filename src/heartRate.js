@@ -42,6 +42,9 @@ const minutes = (h, m, ap) => {
 
 /** The year an export covers, from its filename ("Heart_rate_Jul222026-Oct212026.pdf") or text. */
 export function exportYear(filename = '', text = '') {
+  // The range first: in "Jul202026-Oct212026" a bare 20xx scan finds "2020".
+  const range = exportRange(filename);
+  if (range) return Number(range.from.slice(0, 4));
   const fromName = String(filename).match(/(20\d{2})/);
   if (fromName) return Number(fromName[1]);
   // Never the profile's date of birth.

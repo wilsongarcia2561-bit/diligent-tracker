@@ -584,8 +584,8 @@ function heartRateBlock(calc) {
         ? `<p class="hr-note">No task MET to compare with. From heart rate alone this day reads MET ${hr.suggested}.</p>`
         : hr.verdict === 'agree'
           ? `<p class="hr-verdict ok">Agrees with the day’s MET ${hr.dayMet.toFixed(2)} (within 0.5) — keep it.</p>`
-          : `<p class="hr-verdict warn">${Math.abs(hr.diff).toFixed(2)} ${hr.verdict === 'down' ? 'below' : 'above'} the day’s MET ${hr.dayMet.toFixed(2)}. §5 says revise ${hr.verdict}.</p>
-             <button type="button" class="btn sm primary" data-action="apply-hr-met">Use MET ${hr.suggested}</button>`;
+          : `<p class="hr-verdict diff">Heart rate reads ${Math.abs(hr.diff).toFixed(2)} ${hr.verdict === 'down' ? 'below' : 'above'} the day’s MET ${hr.dayMet.toFixed(2)}. The day keeps its MET; you can revise it ${hr.verdict} if you trust the watch more.</p>
+             <button type="button" class="btn sm ghost" data-action="apply-hr-met">Use MET ${hr.suggested}</button>`;
     body = `${heartRateChart(rows, hr)}
       <div class="hr-stats">
         ${stat('Work avg', `${Math.round(hr.hr)} bpm`)}
@@ -1011,7 +1011,8 @@ function handleSummaryImport(text, filename, form) {
  */
 function handleHeartRateImport(text, filename, form) {
   const range = exportRange(filename);
-  const year = exportYear(filename, text) || Number(todayIso().slice(0, 4));
+  const foundYear = exportYear(filename, text);
+  const year = foundYear || Number(todayIso().slice(0, 4));
   const readings = parseHeartRate(text, { year, range });
   if (!readings.length) {
     toast('No heart-rate readings could be read from that file.', 'warn');
@@ -1046,18 +1047,19 @@ function handleHeartRateImport(text, filename, form) {
   toast(`Heart rate saved: ${readings.length.toLocaleString()} readings over ${dates.length} day${dates.length === 1 ? '' : 's'} (${dates[0]} to ${dates.at(-1)}), used as recorded — no correction.`);
   if (checked) {
     toast(groups.revise.length
-      ? `${groups.revise.length} of ${checked} checked work days disagree with their MET — see the summary to revise them.`
+      ? `${groups.revise.length} of ${checked} checked work days differ from their MET by heart rate — task METs are kept; see the summary.`
       : `All ${checked} checked work days agree with their MET.`, groups.revise.length ? 'warn' : 'ok');
   }
 
   const line = ({ date, hr }) => `  ${date}  MET ${hr.dayMet.toFixed(2)} → ${hr.suggested}  (heart rate ${Math.round(hr.hr)} bpm, HRR ${Math.round(hr.hrr * 100)}% → MET ${hr.met.toFixed(2)}; ${Math.round(hr.minutes)}/${Math.round(hr.span)} min recorded)`;
   const lines = [
     `Read ${readings.length.toLocaleString()} heart-rate readings from ${filename}, ${dates[0]} to ${dates.at(-1)} (${dates.length} days).`,
+    ...(foundYear || /\b20\d{2}\b/.test(text) ? [] : [`The export names no year (not in the filename or the rows), so ${year} was assumed.`]),
     `Each 30-min window counts at the middle of its min–max, as recorded (no +30/+35 correction). HRR = (HR − ${settings.restingHr}) ÷ (${settings.maxHr} − ${settings.restingHr}); MET = 1 + 10 × HRR.`,
   ];
   if (groups.revise.length) {
     const down = groups.revise.filter((g) => g.hr.verdict === 'down').length;
-    lines.push('', `Heart rate disagrees with the day’s MET by more than 0.5 on ${groups.revise.length} day${groups.revise.length === 1 ? '' : 's'} (${down} lower, ${groups.revise.length - down} higher). §5: revise both ways.`, ...groups.revise.map(line));
+    lines.push('', `Heart rate differs from the day’s MET by more than 0.5 on ${groups.revise.length} day${groups.revise.length === 1 ? '' : 's'} (${down} lower, ${groups.revise.length - down} higher). Optional §5 revisions — the task MET stays unless you apply one:`, ...groups.revise.map(line));
   }
   if (groups.agree.length) lines.push('', `Agrees with the day’s MET (kept): ${groups.agree.map((g) => g.date).join(', ')}`);
   if (groups.sparse.length) lines.push('', `Too little recorded during work to judge (under 60% of work minutes): ${groups.sparse.map((g) => g.date).join(', ')}`);
@@ -1069,11 +1071,11 @@ function handleHeartRateImport(text, filename, form) {
   openTextPanel({
     title: 'Heart-rate import',
     hint: groups.revise.length
-      ? 'Nothing has been changed yet. Revise every listed day now, or open a day and use “Use MET” in its heart-rate panel.'
+      ? 'Nothing has been changed: every day keeps its task MET and heart rate is only a check. Close this to leave them as they are, or revise the listed days (or a single day from its heart-rate panel).'
       : 'The readings are stored with each day; open a day to see its heart-rate panel.',
     text: lines.join('\n'),
     action: groups.revise.length ? {
-      label: `Revise ${groups.revise.length} day${groups.revise.length === 1 ? '' : 's'}`,
+      label: `Revise ${groups.revise.length} day${groups.revise.length === 1 ? '' : 's'} anyway`,
       run: () => {
         let done = 0;
         for (const { date, hr } of groups.revise) {
@@ -1148,8 +1150,13 @@ async function handleImportFile(e, form) {
 function spreadsheetText(sheets) {
   const filled = sheets.filter((sh) => sh.rows.length);
   if (!filled.length) return null;
-  const table = filled.find((sh) => looksLikeSummaryTable(rowsToCsv(sh.rows)));
-  if (table) return rowsToCsv(table.rows);
+  // A table may sit under a title or note rows: try dropping up to 10 leading rows.
+  for (const sh of filled) {
+    for (let skip = 0; skip < Math.min(10, sh.rows.length); skip += 1) {
+      const csv = rowsToCsv(sh.rows.slice(skip));
+      if (looksLikeSummaryTable(csv)) return csv;
+    }
+  }
   const hr = filled.find((sh) => looksLikeHeartRateExport(rowsToText(sh.rows)));
   return rowsToText((hr || filled[0]).rows);
 }

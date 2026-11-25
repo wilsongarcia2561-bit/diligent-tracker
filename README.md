@@ -72,11 +72,12 @@ used **as recorded**: the old +30 / +35 Samsung correction is retired. Each 30-m
 the middle of its min–max, weighted by the minutes it overlaps the day's work time (the shift, or
 its timed phases, minus lunch and any excluded windows); "Exercising" segments are only marked and
 single "Resting" spot readings are left out. HRR = (HR − 49) ÷ (201 − 49) (both editable in
-Settings) and MET = 1 + 10 × HRR, the §4 table as one line. Within 0.5 of the day's MET it agrees;
-further out §5 says revise, up or down. Under 60% of work minutes recorded, the day is too thin to
-judge and keeps its MET. Each day shows a heart-rate panel (chart, average, HRR, MET, verdict, and
-*Use MET* when it disagrees); after an import, a summary lists every day that disagrees with a
-*Revise N days* button. Nothing changes until one of those is pressed. See `src/heartRate.js`.
+Settings) and MET = 1 + 10 × HRR, the §4 table as one line. **Heart rate is a check, not a source:**
+every day keeps its task MET. Within 0.5 of it, the day agrees; further out it is noted, and §5
+allows a revision either way. Under 60% of work minutes recorded, the day is too thin to judge.
+Each day shows a heart-rate panel (chart, average, HRR, MET, verdict, and an optional *Use MET*);
+after an import, a summary lists the days that differ with an optional *Revise N days anyway*.
+Nothing changes unless one of those is pressed. See `src/heartRate.js`.
 
 **Reconciling with the document (§6, §12).** Days listed in DILIGENT IV's hand-computed dataset
 show the document's figure and the difference in their data-quality panel (a warning past

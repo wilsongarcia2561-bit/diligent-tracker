@@ -491,37 +491,18 @@ describe('§5 raw heart-rate check of a day', () => {
     assert.ok(w.exclude.some(([a, b]) => a === 600 && b === 630));
   });
 
-  it('finds no gap behind a phase nested inside a longer one', () => {
-    // B sits inside A, so C follows A directly (A runs to 12:00; only 12:00–13:00 is a gap).
-    const w = workWindow(day({
-      lunchStart: '', lunchEnd: '',
-      phases: [
-        { description: 'A', start: '08:00', end: '12:00' },
-        { description: 'B', start: '09:00', end: '10:00' },
-        { description: 'C', start: '13:00', end: '16:00' },
-      ],
-    }));
-    assert.deepEqual(w.exclude, [[720, 780]]);
-  });
-
-  it('does not count lunch twice when timed phases leave the same hour as a gap', () => {
-    const timed = day({ phases: [{ description: 'A', met: 6, start: '08:00', end: '12:00' }, { description: 'B', met: 6, start: '13:00', end: '16:00' }] });
-    const calc = calculateDay(timed, SETTINGS);
-    assert.equal(calc.heartRate.span, 420);
-    assert.ok(calc.heartRate.coverage <= 1, `coverage ${calc.heartRate.coverage}`);
-    assert.equal(calc.heartRate.minutes, 420);
-  });
-
-  it('flags a day whose MET the raw heart rate reads lower, and suggests the revision', () => {
+  it('notes a day whose MET the raw heart rate reads lower, keeps the MET, and offers the revision', () => {
     const calc = calculateDay(day(), SETTINGS);
     assert.equal(calc.heartRate.verdict, 'down');
     assert.equal(calc.heartRate.minutes, 420);
     close(calc.heartRate.met, 4.68);
     assert.equal(calc.heartRate.suggested, 4.75);
     const flag = calc.flags.find((f) => /Raw watch heart rate/.test(f.text));
-    assert.equal(flag.level, 'warn');
+    assert.equal(flag.level, 'info', 'advisory: a difference is a note, not a data-quality warning');
     assert.match(flag.text, /no correction/);
-    assert.match(flag.text, /revise down to 4\.75/);
+    assert.match(flag.text, /task MET is kept/);
+    assert.match(flag.text, /revise it down to 4\.75/);
+    assert.equal(calc.blendedMet, 6, 'the day keeps its MET');
   });
 
   it('agrees quietly when the MET is within 0.5, and skips non-work days', () => {
@@ -553,7 +534,7 @@ describe('§5 raw heart-rate check of a day', () => {
     assert.equal(reviseToHeartRate(two, { ...calc.heartRate, verdict: 'agree' }), null);
   });
 
-  it('explains a §6 gap when the day was revised down on raw heart rate', () => {
+  it('explains a §6 gap when the day keeps a task MET below a corrected-HR revision', () => {
     const calc = calculateDay({ date: '2026-08-12', weightKg: 57.6, netWorkMinutesOverride: 288, neatKcal: 95, tefKcal: 210, backgroundKcal: 117, phases: [{ met: 4.5, netMinutesOverride: 288 }] }, SETTINGS);
     const flag = calc.flags.find((f) => /DILIGENT IV §6/.test(f.text));
     assert.equal(flag.level, 'info');

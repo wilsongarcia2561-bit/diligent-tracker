@@ -220,5 +220,27 @@ export function rowsToCsv(rows) {
   }).join(',')).join('\n');
 }
 
-/** Rows → plain text, one row per line with cells spaced apart (calendar text and heart-rate rows read this way). */
-export const rowsToText = (rows) => rows.map((r) => r.filter((c) => String(c).trim() !== '').join('  ')).join('\n');
+/**
+ * Rows → plain text, one row per line with cells spaced apart (calendar text and
+ * heart-rate rows read this way). Two clock cells side by side (a start and an
+ * end column) are joined as a "start - end" window, and two bare numbers after
+ * them as "min-max", the way the Samsung export prints them.
+ */
+export function rowsToText(rows) {
+  const CLOCK = /^\d{1,2}[:.]\d{2}(\s*[ap]\.?m\.?)?$/i;
+  return rows.map((r) => {
+    const cells = r.map((c) => String(c).trim()).filter((c) => c !== '');
+    const out = [];
+    for (let i = 0; i < cells.length; i += 1) {
+      if (CLOCK.test(cells[i]) && CLOCK.test(cells[i + 1] || '')) {
+        out.push(`${cells[i]} - ${cells[i + 1]}`);
+        i += 1;
+        if (/^\d{2,3}$/.test(cells[i + 1] || '') && /^\d{2,3}$/.test(cells[i + 2] || '')) {
+          out.push(`${cells[i + 1]}-${cells[i + 2]}`);
+          i += 2;
+        }
+      } else out.push(cells[i]);
+    }
+    return out.join('  ');
+  }).join('\n');
+}

@@ -151,4 +151,10 @@ describe('sync bookkeeping and merging', () => {
     store.importJson(JSON.stringify(backup));
     assert.deepEqual(store.getHeartRate('2026-10-07'), [[480, 509, 95, 115, '']]);
   });
+
+  it('merges an overlapping heart-rate export into a day instead of replacing it', () => {
+    store.saveHeartRate({ '2026-10-07': [[480, 509, 95, 115, ''], [510, 539, 90, 110, '']] });
+    store.saveHeartRate({ '2026-10-07': [[510, 539, 90, 110, ''], [540, 569, 100, 120, '']] });
+    assert.deepEqual(store.getHeartRate('2026-10-07').map((r) => r[0]), [480, 510, 540], 'duplicates dropped, rows kept in time order');
+  });
 });

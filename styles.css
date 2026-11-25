@@ -525,7 +525,7 @@ code { font: 500 0.9em var(--mono); background: var(--panel-2); border: 1px soli
 .hr-stats strong { display: block; margin-top: 2px; font: 600 14px var(--mono); font-variant-numeric: tabular-nums; }
 .hr-verdict { font-size: 13px; }
 .hr-verdict.ok { color: var(--green); }
-.hr-verdict.warn { color: var(--amber); }
+.hr-verdict.diff { color: var(--dim); }
 .hr-note { font-size: 13px; color: var(--dim); }
 .hr-block .hint { font-size: 11px; color: var(--faint); }
 
@@ -670,13 +670,13 @@ input[type="checkbox"] { accent-color: var(--green); width: 15px; height: 15px; 
   display: grid; place-items: center; padding: 16px;
 }
 .modal {
-  width: min(720px, 100%); max-height: calc(100vh - 32px);
+  width: min(720px, 100%); max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); overflow-y: auto;
   background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--r-lg);
   padding: 22px; display: flex; flex-direction: column; gap: 12px;
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
 }
 .modal-head { display: flex; justify-content: space-between; align-items: center; }
-.modal textarea { flex: 1; min-height: 260px; font: 400 12px/1.55 var(--mono); color: var(--dim); white-space: pre; }
+.modal textarea { flex: 1 1 auto; min-height: min(260px, 32dvh); font: 400 12px/1.55 var(--mono); color: var(--dim); white-space: pre; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
 
 /* --------------------------------- toasts -------------------------------- */

@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import { deflateRawSync } from 'node:zlib';
 
 import { looksLikeSummaryTable, parseSummaryTable } from '../src/summaryImport.js';
+import { parseHeartRate } from '../src/heartRate.js';
 import { readXlsx, rowsToCsv, rowsToText } from '../src/xlsx.js';
 
 /** A minimal zip writer: enough to hand-build .xlsx files (CRC left 0 — the reader doesn't check it). */
@@ -94,6 +95,12 @@ describe('reading .xlsx files with no library', () => {
 
   it('refuses a file that is not a zip, with a message saying what to do', async () => {
     await assert.rejects(readXlsx(Buffer.from('D0CF11E0 old binary xls')), /save it as \.xlsx or \.csv/);
+  });
+
+  it('rejoins heart-rate rows that a spreadsheet split across cells', () => {
+    const text = rowsToText([['2026-10-21', '14:30', '14:59', '73', '103', 'Exercising'], ['2026-10-21', '2:30 PM', '2:59 PM', '73', '103']]);
+    assert.equal(text.split('\n')[0], '2026-10-21  14:30 - 14:59  73-103  Exercising');
+    assert.equal(parseHeartRate(text, { year: 2026 }).length, 2);
   });
 
   it('writes rows back out as CSV and as plain text', () => {
